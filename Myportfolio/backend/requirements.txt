@@ -1,0 +1,8 @@
+fastapi==0.115.8
+uvicorn[standard]==0.34.0
+pydantic==2.10.6
+sqlalchemy==2.0.25
+beautifulsoup4==4.12.3
+requests==2.32.3
+apscheduler==3.10.4
+python-multipart==0.0.6
