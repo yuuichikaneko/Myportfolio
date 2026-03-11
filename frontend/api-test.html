@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PC Config Generator - API Test</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gradient-to-br from-slate-900 to-slate-800 min-h-screen">
+    <div class="container mx-auto p-4">
+        <!-- Header -->
+        <div class="text-center mb-8">
+            <h1 class="text-4xl font-bold text-white mb-2">PC Config Generator</h1>
+            <p class="text-slate-400">Improved Scraper with Status Monitoring</p>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            <!-- Main Panel -->
+            <div class="lg:col-span-2">
+                <div class="bg-slate-800 rounded-lg p-6 shadow-lg">
+                    <h2 class="text-2xl font-bold text-white mb-4">Configuration Generator</h2>
+                    <div class="space-y-4">
+                        <div>
+                            <label class="text-white mb-2 block">Budget (JPY)</label>
+                            <input id="budget" type="number" value="150000" 
+                                class="w-full bg-slate-700 text-white rounded px-4 py-2" min="50000" max="500000">
+                        </div>
+                        <div>
+                            <label class="text-white mb-2 block">Usage</label>
+                            <select id="usage" class="w-full bg-slate-700 text-white rounded px-4 py-2">
+                                <option value="general">General</option>
+                                <option value="gaming" selected>Gaming</option>
+                                <option value="video_editing">Video Editing</option>
+                            </select>
+                        </div>
+                        <button onclick="generateConfig()" 
+                            class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded">
+                            Generate Configuration
+                        </button>
+                    </div>
+                    
+                    <div id="result" class="mt-6 hidden bg-slate-700 rounded p-4">
+                        <h3 class="text-white font-bold mb-2">Result:</h3>
+                        <div id="resultContent" class="text-slate-300 text-sm space-y-1"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Scraper Status Panel (Right sidebar) -->
+            <div class="lg:col-span-1">
+                <div class="bg-slate-700 rounded-lg p-4 shadow-lg sticky top-4">
+                    <h3 class="text-lg font-bold text-white mb-3">Scraper Status</h3>
+                    <div id="status" class="text-slate-300 text-sm space-y-2">
+                        <div class="text-slate-400">Loading...</div>
+                    </div>
+                    <button onclick="refreshStatus()" 
+                        class="w-full mt-4 bg-slate-600 hover:bg-slate-500 text-white py-1 px-2 rounded text-sm">
+                        Refresh
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- API Endpoints Info -->
+        <div class="mt-8 bg-slate-800 rounded-lg p-6">
+            <h2 class="text-xl font-bold text-white mb-3">API Endpoints</h2>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-slate-300 text-sm">
+                <div>
+                    <span class="text-blue-400">GET</span> /
+                    <span class="text-slate-500">← Health check</span>
+                </div>
+                <div>
+                    <span class="text-blue-400">GET</span> /scraper/status
+                    <span class="text-slate-500">← Current status</span>
+                </div>
+                <div>
+                    <span class="text-green-400">POST</span> /generate-config
+                    <span class="text-slate-500">← Generate config</span>
+                </div>
+                <div>
+                    <span class="text-slate-400">All endpoints: http://localhost:8000</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_URL = "http://localhost:8000";
+
+        async function generateConfig() {
+            const budget = document.getElementById("budget").value;
+            const usage = document.getElementById("usage").value;
+
+            try {
+                const response = await fetch(`${API_URL}/generate-config`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ budget: parseInt(budget), usage })
+                });
+
+                if (!response.ok) throw new Error("Failed to generate config");
+
+                const data = await response.json();
+                displayResult(data);
+            } catch (err) {
+                alert("Error: " + err.message);
+            }
+        }
+
+        function displayResult(data) {
+            const resultDiv = document.getElementById("result");
+            const resultContent = document.getElementById("resultContent");
+
+            resultContent.innerHTML = `
+                <div>Usage: <strong>${data.usage}</strong></div>
+                <div>Budget: <strong>${data.budget} JPY</strong></div>
+                <div>Total Price: <strong>${data.total_price} JPY</strong></div>
+                <div>Estimated Power: <strong>${data.estimated_power_w} W</strong></div>
+                <div>Parts: <strong>${data.parts.length}</strong></div>
+                <div class="text-green-400 mt-2">Configuration generated successfully!</div>
+            `;
+
+            resultDiv.classList.remove("hidden");
+        }
+
+        async function refreshStatus() {
+            try {
+                const response = await fetch(`${API_URL}/scraper/status`);
+                if (!response.ok) throw new Error("Failed to fetch status");
+
+                const data = await response.json();
+                displayStatus(data);
+            } catch (err) {
+                document.getElementById("status").innerHTML = `<div class="text-red-400">Error: ${err.message}</div>`;
+            }
+        }
+
+        function displayStatus(data) {
+            const lastUpdate = data.last_update_time 
+                ? new Date(data.last_update_time).toLocaleString("ja-JP")
+                : "Never";
+
+            document.getElementById("status").innerHTML = `
+                <div>Cache: <strong>${data.cache_enabled ? "✓ On" : "✗ Off"}</strong></div>
+                <div>Cache TTL: <strong>${data.cache_ttl_seconds}s</strong></div>
+                <div>DB Parts: <strong>${data.total_parts_in_db}</strong></div>
+                <div>Cached: <strong>${data.cached_categories.length}/7</strong></div>
+                <div>Retry: <strong>${data.retry_count}x</strong></div>
+                <div>Rate Limit: <strong>${data.rate_limit_delay}s</strong></div>
+                <div class="border-t border-slate-600 pt-2 text-xs text-slate-500">
+                    Last Update:<br>${lastUpdate}
+                </div>
+            `;
+        }
+
+        // Auto-refresh status every 30 seconds
+        refreshStatus();
+        setInterval(refreshStatus, 30000);
+    </script>
+</body>
+</html>
