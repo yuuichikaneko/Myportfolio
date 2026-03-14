@@ -14,6 +14,7 @@ class PCPartSerializer(serializers.ModelSerializer):
 class ConfigurationSerializer(serializers.ModelSerializer):
     usage_display = serializers.CharField(source='get_usage_display', read_only=True)
     cpu_data = PCPartSerializer(source='cpu', read_only=True)
+    cpu_cooler_data = PCPartSerializer(source='cpu_cooler', read_only=True)
     gpu_data = PCPartSerializer(source='gpu', read_only=True)
     motherboard_data = PCPartSerializer(source='motherboard', read_only=True)
     memory_data = PCPartSerializer(source='memory', read_only=True)
@@ -25,8 +26,8 @@ class ConfigurationSerializer(serializers.ModelSerializer):
         model = Configuration
         fields = [
             'id', 'budget', 'usage', 'usage_display', 'total_price',
-            'cpu', 'gpu', 'motherboard', 'memory', 'storage', 'psu', 'case',
-            'cpu_data', 'gpu_data', 'motherboard_data', 'memory_data', 'storage_data', 'psu_data', 'case_data',
+            'cpu', 'cpu_cooler', 'gpu', 'motherboard', 'memory', 'storage', 'psu', 'case',
+            'cpu_data', 'cpu_cooler_data', 'gpu_data', 'motherboard_data', 'memory_data', 'storage_data', 'psu_data', 'case_data',
             'created_at'
         ]
         read_only_fields = ['id', 'total_price', 'created_at']

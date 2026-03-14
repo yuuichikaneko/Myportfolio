@@ -1,9 +1,11 @@
 from django.db import models
+from django.utils import timezone
 
 class PCPart(models.Model):
     """PC パーツモデル"""
     PART_CHOICES = [
         ('cpu', 'CPU'),
+        ('cpu_cooler', 'CPU Cooler'),
         ('gpu', 'GPU'),
         ('motherboard', 'Motherboard'),
         ('memory', 'Memory'),
@@ -39,6 +41,7 @@ class Configuration(models.Model):
     budget = models.IntegerField()
     usage = models.CharField(max_length=20, choices=USAGE_CHOICES)
     cpu = models.ForeignKey(PCPart, on_delete=models.SET_NULL, null=True, related_name='cfg_cpu')
+    cpu_cooler = models.ForeignKey(PCPart, on_delete=models.SET_NULL, null=True, related_name='cfg_cpu_cooler')
     gpu = models.ForeignKey(PCPart, on_delete=models.SET_NULL, null=True, related_name='cfg_gpu')
     motherboard = models.ForeignKey(PCPart, on_delete=models.SET_NULL, null=True, related_name='cfg_mobo')
     memory = models.ForeignKey(PCPart, on_delete=models.SET_NULL, null=True, related_name='cfg_memory')
@@ -47,12 +50,19 @@ class Configuration(models.Model):
     case = models.ForeignKey(PCPart, on_delete=models.SET_NULL, null=True, related_name='cfg_case')
     total_price = models.IntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
+    is_deleted = models.BooleanField(default=False, db_index=True)
+    deleted_at = models.DateTimeField(null=True, blank=True)
     
     class Meta:
         ordering = ['-created_at']
     
     def __str__(self):
         return f"{self.get_usage_display()} - ¥{self.total_price}"
+
+    def soft_delete(self):
+        self.is_deleted = True
+        self.deleted_at = timezone.now()
+        self.save(update_fields=['is_deleted', 'deleted_at'])
 
 
 class ScraperStatus(models.Model):

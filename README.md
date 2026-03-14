@@ -31,6 +31,8 @@ Runs on `http://localhost:8001`
 Windows helper scripts:
 - `start_django.bat`
 - `start_django.ps1`
+- `start_django_frontend.bat`
+- `start_django_frontend.ps1`
 
 ### Frontend (React via Vite)
 ```bash
@@ -38,7 +40,7 @@ cd frontend
 npm install
 npm run dev
 ```
-Runs on `http://localhost:5173`
+Runs on `http://127.0.0.1:5173` (or next free port)
 
 ### Frontend (CDN Alternative - No Node.js required)
 Open `frontend/index-cdn.html` in a browser or serve with:

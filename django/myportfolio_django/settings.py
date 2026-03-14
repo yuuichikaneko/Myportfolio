@@ -11,9 +11,12 @@ https://docs.djangoproject.com/en/4.2/ref/settings/
 """
 
 from pathlib import Path
+from decouple import config
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+APP_ENV = config('APP_ENV', default='development')
 
 
 # Quick-start development settings - unsuitable for production
@@ -139,8 +142,19 @@ REST_FRAMEWORK = {
 CORS_ALLOWED_ORIGINS = [
     'http://localhost:3000',
     'http://localhost:8000',
+    'http://localhost:5173',
+    'http://localhost:5174',
+    'http://localhost:8001',
     'http://127.0.0.1:3000',
     'http://127.0.0.1:8000',
+    'http://127.0.0.1:5173',
+    'http://127.0.0.1:5174',
+    'http://127.0.0.1:8001',
+]
+
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    r"^http://localhost:5\d{3}$",
+    r"^http://127\.0\.0\.1:5\d{3}$",
 ]
 
 # Celery
@@ -157,4 +171,61 @@ CACHES = {
         'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
         'LOCATION': 'unique-snowflake',
     }
+}
+
+# Dospara scraper configuration (override per environment as needed)
+DOSPARA_SCRAPER = {
+    'url': 'https://www.dospara.co.jp/parts',
+    'products_api_url': 'https://www.dospara.co.jp/s/dospara/api/getProducts',
+    'timeout': 20,
+    'max_items': 200,
+    'batch_size': 80,
+    'headers': {
+        'User-Agent': (
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+            'AppleWebKit/537.36 (KHTML, like Gecko) '
+            'Chrome/123.0.0.0 Safari/537.36'
+        ),
+    },
+    'selectors': {
+        'item_roots': [
+            'article',
+            'li',
+            "div[class*='item']",
+            "div[class*='product']",
+            "div[class*='card']",
+        ],
+        'name': [
+            'a[title]',
+            'h1',
+            'h2',
+            'h3',
+            'a[href]',
+        ],
+        'price': [
+            '[data-price]',
+            "span[class*='price']",
+            "div[class*='price']",
+            "p[class*='price']",
+        ],
+        'link': [
+            'a[href]',
+        ],
+    },
+}
+
+# Environment profile for scraper behavior (development/staging/production)
+DOSPARA_SCRAPER_ENV = config('DOSPARA_SCRAPER_ENV', default=APP_ENV)
+DOSPARA_SCRAPER_BY_ENV = {
+    'development': {
+        'max_items': 120,
+    },
+    'staging': {
+        'timeout': 25,
+        'max_items': 200,
+    },
+    'production': {
+        'timeout': 30,
+        'max_items': 300,
+    },
 }

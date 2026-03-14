@@ -10,7 +10,7 @@
     <div id="app"></div>
 
     <script>
-      const API_BASE_URL = "http://localhost:8001";
+      const API_BASE_URL = "http://localhost:8001/api";
 
       async function generateConfig(budget, usage) {
         const button = document.querySelector('button[type="submit"]');
@@ -18,7 +18,7 @@
         button.textContent = "Generating...";
 
         try {
-          const response = await fetch(`${API_BASE_URL}/generate-config`, {
+          const response = await fetch(`${API_BASE_URL}/configurations/generate/`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ budget, usage }),

@@ -70,29 +70,29 @@
                     <span class="text-slate-500">← Health check</span>
                 </div>
                 <div>
-                    <span class="text-blue-400">GET</span> /scraper/status
+                    <span class="text-blue-400">GET</span> /api/scraper-status/summary/
                     <span class="text-slate-500">← Current status</span>
                 </div>
                 <div>
-                    <span class="text-green-400">POST</span> /generate-config
+                    <span class="text-green-400">POST</span> /api/configurations/generate/
                     <span class="text-slate-500">← Generate config</span>
                 </div>
                 <div>
-                    <span class="text-slate-400">All endpoints: http://localhost:8000</span>
+                    <span class="text-slate-400">All endpoints: http://localhost:8001/api</span>
                 </div>
             </div>
         </div>
     </div>
 
     <script>
-        const API_URL = "http://localhost:8000";
+        const API_URL = "http://localhost:8001/api";
 
         async function generateConfig() {
             const budget = document.getElementById("budget").value;
             const usage = document.getElementById("usage").value;
 
             try {
-                const response = await fetch(`${API_URL}/generate-config`, {
+                const response = await fetch(`${API_URL}/configurations/generate/`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ budget: parseInt(budget), usage })
@@ -125,7 +125,7 @@
 
         async function refreshStatus() {
             try {
-                const response = await fetch(`${API_URL}/scraper/status`);
+                const response = await fetch(`${API_URL}/scraper-status/summary/`);
                 if (!response.ok) throw new Error("Failed to fetch status");
 
                 const data = await response.json();
