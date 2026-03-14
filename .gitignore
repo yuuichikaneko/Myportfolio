@@ -70,10 +70,13 @@ verify_*.py
 # Temporary
 *.tmp
 *.temp
+archive/
 start_servers.bat
 start_servers.py
 run-dev.bat
 dev.bat
 start-dev.bat
-create_superuser.py
 FRONTEND_SETUP.md
+
+# Django app utilities should remain tracked after folder split.
+!django/create_superuser.py
