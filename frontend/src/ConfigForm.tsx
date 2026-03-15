@@ -1,5 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
-import { getMarketPriceRange, getPartPriceRanges, type CustomBudgetWeights, type PartPriceRange } from "./api";
+import {
+  getMarketPriceRange,
+  getPartPriceRanges,
+  getStorageInventory,
+  type CustomBudgetWeights,
+  type PartPriceRange,
+  type StorageInventoryResponse,
+} from "./api";
 
 const FALLBACK_MARKET_PRICE_RANGE = {
   min: 89980,
@@ -16,8 +23,14 @@ interface ConfigFormProps {
       radiatorSize: "120" | "240" | "360";
       coolingProfile: "silent" | "performance";
       caseSize: "mini" | "mid" | "full";
+      caseFanPolicy: "auto" | "silent" | "airflow";
       cpuVendor: "any" | "intel" | "amd";
       buildPriority: "cost" | "spec";
+      storagePreference: "ssd" | "hdd";
+      mainStorageCapacity: "512" | "1024" | "2048" | "4096";
+      storage2PartId: number | null;
+      storage3PartId: number | null;
+      osEdition: "auto" | "home" | "pro";
       useCustomBudgetWeights: boolean;
       customBudgetWeights: CustomBudgetWeights;
     }
@@ -31,7 +44,8 @@ const DEFAULT_CUSTOM_BUDGET_WEIGHTS: CustomBudgetWeights = {
   gpu: 30,
   motherboard: 10,
   memory: 15,
-  storage: 15,
+  storage: 10,
+  os: 5,
   psu: 5,
   case: 3,
 };
@@ -43,6 +57,7 @@ const CUSTOM_BUDGET_WEIGHT_FIELDS: Array<{ key: keyof CustomBudgetWeights; label
   { key: "motherboard", label: "マザーボード" },
   { key: "memory", label: "メモリー" },
   { key: "storage", label: "ストレージ" },
+  { key: "os", label: "OS" },
   { key: "psu", label: "PSU" },
   { key: "case", label: "ケース" },
 ];
@@ -76,6 +91,12 @@ const CASE_SIZE_OPTIONS = [
   { value: "full", label: "フルサイズ" },
 ] as const;
 
+const CASE_FAN_POLICY_OPTIONS = [
+  { value: "auto", label: "自動" },
+  { value: "silent", label: "静音重視" },
+  { value: "airflow", label: "冷却重視" },
+] as const;
+
 const CPU_VENDOR_OPTIONS = [
   { value: "any", label: "こだわらない" },
   { value: "intel", label: "Intel" },
@@ -87,20 +108,171 @@ const BUILD_PRIORITY_OPTIONS = [
   { value: "spec", label: "スペック重視" },
 ] as const;
 
+const STORAGE_PREFERENCE_OPTIONS = [
+  { value: "ssd", label: "SSD" },
+] as const;
+
+const MAIN_STORAGE_CAPACITY_OPTIONS = [
+  { value: "512", label: "512GB" },
+  { value: "1024", label: "1TB" },
+  { value: "2048", label: "2TB" },
+  { value: "4096", label: "4TB" },
+] as const;
+
+const STORAGE_ADDITIONAL_OPTIONS = [
+  { value: "none", label: "なし", desc: "追加ストレージなし" },
+  { value: "nvme_ssd", label: "M.2 SSD", desc: "超高速なストレージを使用" },
+  { value: "sata_ssd", label: "SATA SSD", desc: "高速なストレージを使用" },
+  { value: "hdd", label: "HDD", desc: "低速だが大容量でも比較的に安価" },
+] as const;
+
+const OS_EDITION_OPTIONS = [
+  { value: "auto", label: "自動", desc: "用途に合わせて Home / Pro を自動選択" },
+  { value: "home", label: "Home", desc: "個人利用向けの標準構成" },
+  { value: "pro", label: "Pro", desc: "業務用途向けの拡張機能込み" },
+] as const;
+
+const STORAGE_INTERFACE_FILTER_OPTIONS = [
+  { value: "all", label: "すべて" },
+  { value: "nvme", label: "NVMe" },
+  { value: "sata", label: "SATA" },
+  { value: "other", label: "その他" },
+] as const;
+
+const STORAGE_MEDIA_LABELS: Record<"ssd" | "hdd" | "other", string> = {
+  ssd: "SSD",
+  hdd: "HDD",
+  other: "不明",
+};
+
+const STORAGE_CAPACITY_PRIORITY = new Map([
+  [1024, 0],
+  [2048, 1],
+  [4096, 2],
+  [512, 3],
+  [256, 4],
+  [8192, 5],
+  [0, 99],
+]);
+
+function getStorageItemRecommendationScore(item: StorageInventoryResponse["capacity_summary"][number]["items"][number]) {
+  const interfaceScore = item.interface === "nvme" ? 300 : item.interface === "sata" ? 180 : 80;
+  const formFactorScore = item.form_factor === "M.2" ? 40 : item.form_factor === "2.5inch" ? 20 : 0;
+  const valueScore = Math.max(0, 200000 - item.price) / 1000;
+  return interfaceScore + formFactorScore + valueScore;
+}
+
+function getStorageCapacityPriority(capacityGb: number) {
+  return STORAGE_CAPACITY_PRIORITY.get(capacityGb) ?? (capacityGb >= 1024 ? 10 : 20);
+}
+
+function formatCapacityLabel(capacityGb: number) {
+  if (capacityGb >= 1024) {
+    const tb = capacityGb / 1024;
+    return Number.isInteger(tb) ? `${tb}TB` : `${tb.toFixed(1)}TB`;
+  }
+  return `${capacityGb}GB`;
+}
+
+function inferStorageMediaType(item: StorageInventoryResponse["capacity_summary"][number]["items"][number]): "ssd" | "hdd" | "other" {
+  const text = item.name.toLowerCase();
+  const formFactor = (item.form_factor ?? "").toLowerCase();
+
+  if (item.interface === "nvme") {
+    return "ssd";
+  }
+  if (text.includes("ssd") || formFactor.includes("m.2") || formFactor.includes("2.5inch") || text.includes("m.2")) {
+    return "ssd";
+  }
+  // WD SSD モデル番号
+  if (/\b(sa500|sn500|sn580|sn700|sn750|sn850)\b/.test(text)) {
+    return "ssd";
+  }
+  if (/(5400|7200|10000|15000)\s*rpm/i.test(item.name)) {
+    return "hdd";
+  }
+  // HDD キーワード ─ "wd red" 単体は SSD モデルと被るため除外
+  const hddKeywords = [
+    "barracuda",
+    "ironwolf",
+    "wd blue wd",
+    "wd green wd",
+    "wd red wd",
+    "wd purple wd",
+    "mq04",
+    "dt02",
+    "n300",
+    "mg10",
+    "mg11",
+    "hat3300",
+    "hdd",
+  ];
+  if (hddKeywords.some((keyword) => text.includes(keyword))) {
+    return "hdd";
+  }
+  if (item.interface === "sata" && formFactor.includes("3.5")) {
+    return "hdd";
+  }
+  if (item.interface === "sata" && (formFactor.includes("2.5") || formFactor.includes("m.2"))) {
+    return "ssd";
+  }
+  return "other";
+}
+
+function isAdditionalStorageOptionMatch(
+  item: StorageInventoryResponse["capacity_summary"][number]["items"][number],
+  preference: "none" | "nvme_ssd" | "sata_ssd" | "hdd"
+) {
+  if (preference === "none") {
+    return false;
+  }
+  if (preference === "hdd") {
+    return inferStorageMediaType(item) === "hdd";
+  }
+  if (preference === "nvme_ssd") {
+    return inferStorageMediaType(item) === "ssd" && item.interface === "nvme";
+  }
+  if (preference === "sata_ssd") {
+    return inferStorageMediaType(item) === "ssd" && item.interface === "sata";
+  }
+  return false;
+}
+
+function getMainStorageAnnotation(): string {
+  return "デフォルトでは必ず選択されます。";
+}
+
 export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
   const [marketRange, setMarketRange] = useState(FALLBACK_MARKET_PRICE_RANGE);
+  const [marketRangeLoading, setMarketRangeLoading] = useState(true);
+  const [marketRangeError, setMarketRangeError] = useState<string | null>(null);
   const [budget, setBudget] = useState(FALLBACK_MARKET_PRICE_RANGE.default);
   const [usage, setUsage] = useState("gaming");
   const [coolerType, setCoolerType] = useState<"air" | "liquid">("air");
   const [radiatorSize, setRadiatorSize] = useState<"120" | "240" | "360">("240");
   const [coolingProfile, setCoolingProfile] = useState<"silent" | "performance">("performance");
   const [caseSize, setCaseSize] = useState<"mini" | "mid" | "full">("mid");
+  const [caseFanPolicy, setCaseFanPolicy] = useState<"auto" | "silent" | "airflow">("auto");
   const [cpuVendor, setCpuVendor] = useState<"any" | "intel" | "amd">("any");
   const [buildPriority, setBuildPriority] = useState<"cost" | "spec">("cost");
+  const [storagePreference, setStoragePreference] = useState<"ssd" | "hdd">("ssd");
+  const [mainStorageCapacity, setMainStorageCapacity] = useState<"512" | "1024" | "2048" | "4096">("512");
+  const [storagePreference2, setStoragePreference2] = useState<"none" | "nvme_ssd" | "sata_ssd" | "hdd">("none");
+  const [storagePreference3, setStoragePreference3] = useState<"none" | "nvme_ssd" | "sata_ssd" | "hdd">("none");
+  const [storage2CapacityGb, setStorage2CapacityGb] = useState<number | null>(null);
+  const [storage2ProductId, setStorage2ProductId] = useState<number | null>(null);
+  const [storage3CapacityGb, setStorage3CapacityGb] = useState<number | null>(null);
+  const [storage3ProductId, setStorage3ProductId] = useState<number | null>(null);
+  const [osEdition, setOsEdition] = useState<"auto" | "home" | "pro">("auto");
   const [useCustomBudgetWeights, setUseCustomBudgetWeights] = useState(false);
   const [customBudgetWeights, setCustomBudgetWeights] = useState<CustomBudgetWeights>(DEFAULT_CUSTOM_BUDGET_WEIGHTS);
   const [gpuRange, setGpuRange] = useState<PartPriceRange | null>(null);
+  const [storageInventory, setStorageInventory] = useState<StorageInventoryResponse | null>(null);
+  const [storageInventoryLoading, setStorageInventoryLoading] = useState(true);
+  const [storageQuery, setStorageQuery] = useState("");
+  const [storageInterfaceFilter, setStorageInterfaceFilter] = useState<"all" | "nvme" | "sata" | "other">("all");
   const [showMarketSummary, setShowMarketSummary] = useState(false);
+  const [showStorageDbDetails, setShowStorageDbDetails] = useState(false);
   const [popupMessage, setPopupMessage] = useState<string | null>(null);
   const [activeUsageTooltip, setActiveUsageTooltip] = useState<string | null>(null);
   const [activeCoolerTooltip, setActiveCoolerTooltip] = useState<string | null>(null);
@@ -119,8 +291,11 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
             return current;
           });
         }
+        setMarketRangeError(null);
       } catch {
-        return;
+        setMarketRangeError("相場APIの取得に失敗したため、ローカル目安を表示しています。");
+      } finally {
+        setMarketRangeLoading(false);
       }
     };
 
@@ -140,6 +315,21 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
     };
 
     loadPartRanges();
+  }, []);
+
+  useEffect(() => {
+    const loadStorageInventory = async () => {
+      try {
+        const inventory = await getStorageInventory();
+        setStorageInventory(inventory);
+      } catch {
+        return;
+      } finally {
+        setStorageInventoryLoading(false);
+      }
+    };
+
+    loadStorageInventory();
   }, []);
 
   useEffect(() => {
@@ -171,8 +361,14 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
       radiatorSize,
       coolingProfile,
       caseSize,
+      caseFanPolicy,
       cpuVendor,
       buildPriority,
+      storagePreference,
+      mainStorageCapacity,
+      storage2PartId: storage2ProductId,
+      storage3PartId: storage3ProductId,
+      osEdition,
       useCustomBudgetWeights,
       customBudgetWeights,
     });
@@ -191,7 +387,7 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
       const bases = [184980, 274980, 589980, 1309980].map((value) => Math.min(budgetMax, value));
       const [entry, middle, high, flagship] = bases.map((price) => price - sub);
       return [
-        { label: "ロウ", value: entry },
+        { label: "ロー", value: entry },
         { label: "ミドル", value: middle },
         { label: "ハイ", value: high },
         { label: "ハイエンド", value: flagship },
@@ -202,7 +398,7 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
       const bases = [89980, 109980, 172980, 249980];
       const [entry, middle, high, flagship] = bases.map((price) => price - sub);
       return [
-        { label: "ロウ", value: entry },
+        { label: "ロー", value: entry },
         { label: "ミドル", value: middle },
         { label: "ハイ", value: high },
         { label: "ハイエンド", value: flagship },
@@ -211,7 +407,7 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
 
     if (usage === "business") {
       return [
-        { label: "ロウ", value: Math.max(0, min - sub) },
+        { label: "ロー", value: Math.max(0, min - sub) },
         { label: "ミドル", value: Math.max(0, Math.round((min * 1.3) / 10000) * 10000 - sub) },
         { label: "ハイ", value: Math.max(0, Math.round((min * 1.7) / 10000) * 10000 - sub) },
         { label: "ハイエンド", value: Math.max(0, Math.round((min * 2.2) / 10000) * 10000 - sub) },
@@ -223,7 +419,7 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
     const flagship = 979980 - sub;
 
     return [
-      { label: "ロウ", value: entry },
+      { label: "ロー", value: entry },
       { label: "ミドル", value: middle },
       { label: "ハイ", value: high },
       { label: "ハイエンド", value: flagship },
@@ -249,12 +445,171 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
 
   const canSubmit = !isLoading && (!useCustomBudgetWeights || customBudgetWeightTotal > 0);
 
+  const compactCapacityGroups = useMemo(() => {
+    const normalizedQuery = storageQuery.trim().toLowerCase();
+    const groups = storageInventory?.capacity_summary ?? [];
+
+    return groups
+      .map((group) => {
+        const items = group.items
+          .filter((item) => {
+            if (storageInterfaceFilter !== "all" && item.interface !== storageInterfaceFilter) {
+              return false;
+            }
+            if (!normalizedQuery) {
+              return true;
+            }
+            const target = [item.name, item.interface_label, item.form_factor ?? "", group.label]
+              .join(" ")
+              .toLowerCase();
+            return target.includes(normalizedQuery);
+          })
+          .sort((left, right) => {
+            const scoreDiff = getStorageItemRecommendationScore(right) - getStorageItemRecommendationScore(left);
+            if (scoreDiff !== 0) {
+              return scoreDiff;
+            }
+            return left.price - right.price;
+          });
+
+        const prices = items.map((item) => item.price);
+
+        return {
+          ...group,
+          count: items.length,
+          min_price: prices.length > 0 ? Math.min(...prices) : null,
+          max_price: prices.length > 0 ? Math.max(...prices) : null,
+          avg_price: prices.length > 0 ? Math.round(prices.reduce((sum, price) => sum + price, 0) / prices.length) : null,
+          items,
+        };
+      })
+      .filter((group) => group.count > 0)
+      .sort((left, right) => {
+        const priorityDiff = getStorageCapacityPriority(left.capacity_gb) - getStorageCapacityPriority(right.capacity_gb);
+        if (priorityDiff !== 0) {
+          return priorityDiff;
+        }
+        return left.capacity_gb - right.capacity_gb;
+      });
+  }, [storageInterfaceFilter, storageInventory, storageQuery]);
+
+  const interfaceSummary = useMemo(
+    () => storageInventory?.interface_summary.filter((group) => group.count > 0) ?? [],
+    [storageInventory]
+  );
+
+  const filteredStorageCount = useMemo(
+    () => compactCapacityGroups.reduce((sum, group) => sum + group.count, 0),
+    [compactCapacityGroups]
+  );
+
   const segmentButtonClass = (selected: boolean) =>
     `rounded-lg border px-3 py-2 text-sm font-medium transition ${
       selected
         ? "border-blue-700 bg-blue-700 text-white"
         : "border-slate-300 bg-white text-slate-800 hover:bg-slate-50"
     }`;
+
+  const storageInventoryItems = useMemo(
+    () => storageInventory?.capacity_summary.flatMap((group) => group.items) ?? [],
+    [storageInventory]
+  );
+
+  const storage2CapacityOptions = useMemo(() => {
+    if (storagePreference2 === "none") {
+      return [] as Array<{ capacityGb: number; label: string }>;
+    }
+    const capacities = Array.from(
+      new Set(
+        storageInventoryItems
+          .filter((item) => isAdditionalStorageOptionMatch(item, storagePreference2))
+          .map((item) => item.capacity_gb)
+      )
+    ).sort((a, b) => a - b);
+    return capacities.map((capacityGb) => ({
+      capacityGb,
+      label: formatCapacityLabel(capacityGb),
+    }));
+  }, [storageInventoryItems, storagePreference2]);
+
+  const storage3CapacityOptions = useMemo(() => {
+    if (storagePreference3 === "none") {
+      return [] as Array<{ capacityGb: number; label: string }>;
+    }
+    const capacities = Array.from(
+      new Set(
+        storageInventoryItems
+          .filter((item) => isAdditionalStorageOptionMatch(item, storagePreference3))
+          .map((item) => item.capacity_gb)
+      )
+    ).sort((a, b) => a - b);
+    return capacities.map((capacityGb) => ({
+      capacityGb,
+      label: formatCapacityLabel(capacityGb),
+    }));
+  }, [storageInventoryItems, storagePreference3]);
+
+  const storage2ProductOptions = useMemo(() => {
+    if (storagePreference2 === "none" || storage2CapacityGb == null) {
+      return [] as typeof storageInventoryItems;
+    }
+    return storageInventoryItems
+      .filter((item) => isAdditionalStorageOptionMatch(item, storagePreference2))
+      .filter((item) => item.capacity_gb === storage2CapacityGb)
+      .sort((a, b) => a.price - b.price);
+  }, [storageInventoryItems, storagePreference2, storage2CapacityGb]);
+
+  const storage3ProductOptions = useMemo(() => {
+    if (storagePreference3 === "none" || storage3CapacityGb == null) {
+      return [] as typeof storageInventoryItems;
+    }
+    return storageInventoryItems
+      .filter((item) => isAdditionalStorageOptionMatch(item, storagePreference3))
+      .filter((item) => item.capacity_gb === storage3CapacityGb)
+      .sort((a, b) => a.price - b.price);
+  }, [storageInventoryItems, storagePreference3, storage3CapacityGb]);
+
+  useEffect(() => {
+    if (storagePreference2 === "none") {
+      setStorage2CapacityGb(null);
+      setStorage2ProductId(null);
+      return;
+    }
+    if (!storage2CapacityOptions.some((option) => option.capacityGb === storage2CapacityGb)) {
+      setStorage2CapacityGb(storage2CapacityOptions[0]?.capacityGb ?? null);
+    }
+  }, [storagePreference2, storage2CapacityGb, storage2CapacityOptions]);
+
+  useEffect(() => {
+    if (storage2ProductOptions.length === 0) {
+      setStorage2ProductId(null);
+      return;
+    }
+    if (!storage2ProductOptions.some((item) => item.id === storage2ProductId)) {
+      setStorage2ProductId(storage2ProductOptions[0].id);
+    }
+  }, [storage2ProductId, storage2ProductOptions]);
+
+  useEffect(() => {
+    if (storagePreference3 === "none") {
+      setStorage3CapacityGb(null);
+      setStorage3ProductId(null);
+      return;
+    }
+    if (!storage3CapacityOptions.some((option) => option.capacityGb === storage3CapacityGb)) {
+      setStorage3CapacityGb(storage3CapacityOptions[0]?.capacityGb ?? null);
+    }
+  }, [storagePreference3, storage3CapacityGb, storage3CapacityOptions]);
+
+  useEffect(() => {
+    if (storage3ProductOptions.length === 0) {
+      setStorage3ProductId(null);
+      return;
+    }
+    if (!storage3ProductOptions.some((item) => item.id === storage3ProductId)) {
+      setStorage3ProductId(storage3ProductOptions[0].id);
+    }
+  }, [storage3ProductId, storage3ProductOptions]);
 
   return (
     <div className="min-h-screen bg-slate-100 px-4 py-6">
@@ -265,15 +620,17 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
               <p className="mt-1 text-sm text-slate-600">予算と用途を選ぶと、条件に沿った構成を提案します。</p>
               <div className="mt-4 grid gap-2 text-sm">
                 <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-                  相場目安: <span className="font-semibold text-slate-900">{usagePriceHint ? `¥${usagePriceHint.min.toLocaleString("ja-JP")} - ¥${usagePriceHint.max.toLocaleString("ja-JP")}` : `¥${marketRange.min.toLocaleString("ja-JP")} - ¥${marketRange.max.toLocaleString("ja-JP")}`}</span>
+                  相場目安: <span className="font-semibold text-slate-900">{`¥${marketRange.min.toLocaleString("ja-JP")} - ¥${marketRange.max.toLocaleString("ja-JP")}`}</span>
+                  {marketRangeLoading && <span className="ml-2 text-xs text-slate-500">更新中...</span>}
                 </div>
+                {usagePriceHint && (
+                  <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                    用途別の推奨予算帯: <span className="font-semibold text-slate-900">{`¥${usagePriceHint.min.toLocaleString("ja-JP")} - ¥${usagePriceHint.max.toLocaleString("ja-JP")}`}</span>
+                  </div>
+                )}
+                {marketRangeError && <p className="text-xs text-amber-700">{marketRangeError}</p>}
               </div>
             </>
-          )}
-          {gpuRange?.max != null && gpuRange?.min != null && (
-            <p className="mt-2 text-xs text-slate-600">
-              GPU価格帯: ¥{gpuRange.min.toLocaleString("ja-JP")} - ¥{gpuRange.max.toLocaleString("ja-JP")}
-            </p>
           )}
           <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-slate-200">
             <div className="h-full bg-blue-600" style={{ width: `${budgetProgress}%` }} />
@@ -282,7 +639,7 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
 
         <form onSubmit={handleSubmit} className="space-y-4 rounded-xl border border-slate-300 bg-white p-5">
           <section className="space-y-3">
-            <h2 className="text-base font-semibold text-slate-900">1. 予算</h2>
+            <h2 className="text-base font-semibold text-slate-900">予算</h2>
             <label className="inline-flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-xs text-slate-700">
               <input
                 type="checkbox"
@@ -314,7 +671,7 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
           </section>
 
           <section className="space-y-3 border-t border-slate-200 pt-4">
-            <h2 className="text-base font-semibold text-slate-900">2. 用途</h2>
+            <h2 className="text-base font-semibold text-slate-900">用途</h2>
             <div className="grid gap-2 sm:grid-cols-2">
               {USAGE_OPTIONS.map((option) => (
                 <label
@@ -348,7 +705,185 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
           </section>
 
           <section className="space-y-3 border-t border-slate-200 pt-4">
-            <h2 className="text-base font-semibold text-slate-900">3. 冷却・ケース</h2>
+            <h2 className="text-base font-semibold text-slate-900">CPU</h2>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <p className="mb-2 text-sm font-medium text-slate-800">CPUメーカー</p>
+                <div className="grid grid-cols-3 gap-2">
+                  {CPU_VENDOR_OPTIONS.map((option) => (
+                    <button key={option.value} type="button" onClick={() => setCpuVendor(option.value as "any" | "intel" | "amd")} className={segmentButtonClass(cpuVendor === option.value)}>
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <div className="grid grid-cols-2 gap-2">
+                  {BUILD_PRIORITY_OPTIONS.map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      disabled={isLoading || (useCustomBudgetWeights && customBudgetWeightTotal <= 0)}
+                      onClick={() => setBuildPriority(option.value as "cost" | "spec")}
+                      className={`${segmentButtonClass(buildPriority === option.value)} disabled:cursor-not-allowed disabled:opacity-50`}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section className="space-y-3 border-t border-slate-200 pt-4">
+            <h2 className="text-base font-semibold text-slate-900">ストレージ</h2>
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="h-full rounded-lg border border-slate-200 bg-white p-3">
+                  <p className="mb-2 text-sm font-semibold text-slate-800">メインストレージ</p>
+                  <div className="grid gap-2 grid-cols-3">
+                    {MAIN_STORAGE_CAPACITY_OPTIONS.map((option) => (
+                      <button
+                        key={option.value}
+                        type="button"
+                        onClick={() => setMainStorageCapacity(option.value as "512" | "1024" | "2048" | "4096")}
+                        className={segmentButtonClass(mainStorageCapacity === option.value)}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="h-full rounded-lg border border-slate-200 bg-white p-3">
+                  <p className="mb-2 text-sm font-semibold text-slate-800">ストレージ2</p>
+                  <div className="grid gap-2 sm:grid-cols-3">
+                    {STORAGE_ADDITIONAL_OPTIONS.map((option) => (
+                      <button
+                        key={`storage2-${option.value}`}
+                        type="button"
+                        onClick={() => {
+                          setStoragePreference2(option.value as "none" | "nvme_ssd" | "sata_ssd" | "hdd");
+                          setStorage2CapacityGb(null);
+                          setStorage2ProductId(null);
+                        }}
+                        title={option.desc}
+                        className={`${segmentButtonClass(storagePreference2 === option.value)} group relative`}
+                      >
+                        <span className="block">{option.label}</span>
+                        <span className="pointer-events-none absolute -top-12 left-1/2 z-30 w-64 -translate-x-1/2 rounded-md border border-blue-200 bg-white px-2 py-1 text-[11px] font-normal text-blue-800 opacity-0 shadow-md transition group-hover:opacity-100 group-focus-visible:opacity-100">
+                          {option.desc}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                  {storagePreference2 !== "none" && (
+                    <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                      <select
+                        value={storage2CapacityGb ?? ""}
+                        onChange={(event) => {
+                          const value = Number(event.target.value);
+                          setStorage2CapacityGb(Number.isFinite(value) ? value : null);
+                          setStorage2ProductId(null);
+                        }}
+                        className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-blue-600"
+                      >
+                        <option value="">容量を選択</option>
+                        {storage2CapacityOptions.map((option) => (
+                          <option key={`storage2-capacity-${option.capacityGb}`} value={option.capacityGb}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                      <select
+                        value={storage2ProductId ?? ""}
+                        onChange={(event) => {
+                          const value = Number(event.target.value);
+                          setStorage2ProductId(Number.isFinite(value) ? value : null);
+                        }}
+                        disabled={storage2CapacityGb == null || storage2ProductOptions.length === 0}
+                        className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-blue-600 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500"
+                      >
+                        <option value="">製品を選択</option>
+                        {storage2ProductOptions.map((item) => (
+                          <option key={`storage2-item-${item.id}`} value={item.id}>
+                            {`${item.name} / ¥${item.price.toLocaleString("ja-JP")}`}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                </div>
+
+                <div className="h-full rounded-lg border border-slate-200 bg-white p-3">
+                  <p className="mb-2 text-sm font-semibold text-slate-800">ストレージ3</p>
+                  <div className="grid gap-2 sm:grid-cols-3">
+                    {STORAGE_ADDITIONAL_OPTIONS.map((option) => (
+                      <button
+                        key={`storage3-${option.value}`}
+                        type="button"
+                        onClick={() => {
+                          setStoragePreference3(option.value as "none" | "nvme_ssd" | "sata_ssd" | "hdd");
+                          setStorage3CapacityGb(null);
+                          setStorage3ProductId(null);
+                        }}
+                        title={option.desc}
+                        className={`${segmentButtonClass(storagePreference3 === option.value)} group relative`}
+                      >
+                        <span className="block">{option.label}</span>
+                        <span className="pointer-events-none absolute -top-12 left-1/2 z-30 w-64 -translate-x-1/2 rounded-md border border-blue-200 bg-white px-2 py-1 text-[11px] font-normal text-blue-800 opacity-0 shadow-md transition group-hover:opacity-100 group-focus-visible:opacity-100">
+                          {option.desc}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                  {storagePreference3 !== "none" && (
+                    <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                      <select
+                        value={storage3CapacityGb ?? ""}
+                        onChange={(event) => {
+                          const value = Number(event.target.value);
+                          setStorage3CapacityGb(Number.isFinite(value) ? value : null);
+                          setStorage3ProductId(null);
+                        }}
+                        className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-blue-600"
+                      >
+                        <option value="">容量を選択</option>
+                        {storage3CapacityOptions.map((option) => (
+                          <option key={`storage3-capacity-${option.capacityGb}`} value={option.capacityGb}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                      <select
+                        value={storage3ProductId ?? ""}
+                        onChange={(event) => {
+                          const value = Number(event.target.value);
+                          setStorage3ProductId(Number.isFinite(value) ? value : null);
+                        }}
+                        disabled={storage3CapacityGb == null || storage3ProductOptions.length === 0}
+                        className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-blue-600 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500"
+                      >
+                        <option value="">製品を選択</option>
+                        {storage3ProductOptions.map((item) => (
+                          <option key={`storage3-item-${item.id}`} value={item.id}>
+                            {`${item.name} / ¥${item.price.toLocaleString("ja-JP")}`}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <p className="mt-3 text-xs text-slate-500">
+                各選択肢にカーソルを合わせると、用途仕様の注釈を表示します。
+              </p>
+            </div>
+          </section>
+
+          <section className="space-y-3 border-t border-slate-200 pt-4">
+            <h2 className="text-base font-semibold text-slate-900">冷却・ケース</h2>
 
             <div className="space-y-2">
               <p className="text-sm font-medium text-slate-800">CPUクーラー方式</p>
@@ -392,7 +927,7 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
               </div>
             )}
 
-            <div className="grid gap-3 sm:grid-cols-2">
+            <div className="grid gap-3 sm:grid-cols-3">
               <div>
                 <p className="mb-2 text-sm font-medium text-slate-800">クーラー方針</p>
                 <div className="grid grid-cols-2 gap-2">
@@ -413,6 +948,21 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
                   ))}
                 </div>
               </div>
+              <div>
+                <p className="mb-2 text-sm font-medium text-slate-800">ケースファン方針</p>
+                <div className="grid grid-cols-3 gap-2">
+                  {CASE_FAN_POLICY_OPTIONS.map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      onClick={() => setCaseFanPolicy(option.value as "auto" | "silent" | "airflow")}
+                      className={segmentButtonClass(caseFanPolicy === option.value)}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
 
             {(caseSize === "mini" || caseSize === "mid") && (
@@ -423,39 +973,24 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
           </section>
 
           <section className="space-y-3 border-t border-slate-200 pt-4">
-            <h2 className="text-base font-semibold text-slate-900">4. CPUと構成方針</h2>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div>
-                <p className="mb-2 text-sm font-medium text-slate-800">CPUメーカー</p>
-                <div className="grid grid-cols-3 gap-2">
-                  {CPU_VENDOR_OPTIONS.map((option) => (
-                    <button key={option.value} type="button" onClick={() => setCpuVendor(option.value as "any" | "intel" | "amd")} className={segmentButtonClass(cpuVendor === option.value)}>
-                      {option.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div>
-                <p className="mb-2 text-sm font-medium text-slate-800">構成方針</p>
-                <div className="grid grid-cols-2 gap-2">
-                  {BUILD_PRIORITY_OPTIONS.map((option) => (
-                    <button
-                      key={option.value}
-                      type="button"
-                      disabled={isLoading || (useCustomBudgetWeights && customBudgetWeightTotal <= 0)}
-                      onClick={() => setBuildPriority(option.value as "cost" | "spec")}
-                      className={`${segmentButtonClass(buildPriority === option.value)} disabled:cursor-not-allowed disabled:opacity-50`}
-                    >
-                      {option.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
+            <h2 className="text-base font-semibold text-slate-900">OS</h2>
+            <div className="grid gap-2 sm:grid-cols-3">
+              {OS_EDITION_OPTIONS.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => setOsEdition(option.value as "auto" | "home" | "pro")}
+                  className={segmentButtonClass(osEdition === option.value)}
+                >
+                  <span className="block">{option.label}</span>
+                  <span className="mt-1 block text-[11px] font-normal opacity-80">{option.desc}</span>
+                </button>
+              ))}
             </div>
           </section>
 
           <section className="space-y-3 border-t border-slate-200 pt-4">
-            <h2 className="text-base font-semibold text-slate-900">5. 予算配分</h2>
+            <h2 className="text-base font-semibold text-slate-900">予算配分</h2>
             <label className="inline-flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-sm">
               <input type="checkbox" checked={useCustomBudgetWeights} onChange={(e) => setUseCustomBudgetWeights(e.target.checked)} />
               カスタム予算配分を使う

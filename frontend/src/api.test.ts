@@ -4,6 +4,7 @@ import {
   generateConfig,
   getSavedConfigurations,
   getScraperStatus,
+  getStorageInventory,
 } from "./api";
 
 describe("api client", () => {
@@ -55,6 +56,7 @@ describe("api client", () => {
               motherboard_data: null,
               memory_data: null,
               storage_data: null,
+              os_data: null,
               psu_data: null,
               case_data: null,
               created_at: "2026-03-14T10:00:00Z",
@@ -103,5 +105,54 @@ describe("api client", () => {
 
     expect(result.configuration_id).toBe(1);
     expect(result.parts[0].category).toBe("cpu");
+  });
+
+  it("gets storage inventory summary", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          total_count: 2,
+          latest_updated_at: "2026-03-15T10:00:00Z",
+          interface_summary: [
+            { interface: "nvme", label: "NVMe", count: 1, min_price: 10000, max_price: 10000, avg_price: 10000 },
+            { interface: "sata", label: "SATA", count: 1, min_price: 8000, max_price: 8000, avg_price: 8000 },
+          ],
+          capacity_summary: [
+            {
+              capacity_gb: 1024,
+              label: "1TB",
+              count: 1,
+              min_price: 10000,
+              max_price: 10000,
+              avg_price: 10000,
+              items: [
+                {
+                  id: 1,
+                  name: "Sample NVMe 1TB",
+                  price: 10000,
+                  url: "https://example.com/storage-1",
+                  capacity_gb: 1024,
+                  capacity_label: "1TB",
+                  interface: "nvme",
+                  interface_label: "NVMe",
+                  form_factor: "M.2",
+                  updated_at: "2026-03-15T10:00:00Z",
+                },
+              ],
+            },
+          ],
+        }),
+        { status: 200 }
+      )
+    );
+
+    const result = await getStorageInventory();
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:8001/api/storage-inventory/",
+      undefined
+    );
+    expect(result.total_count).toBe(2);
+    expect(result.capacity_summary[0].items[0].interface_label).toBe("NVMe");
   });
 });
