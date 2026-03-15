@@ -19,6 +19,9 @@ class ConfigurationSerializer(serializers.ModelSerializer):
     motherboard_data = PCPartSerializer(source='motherboard', read_only=True)
     memory_data = PCPartSerializer(source='memory', read_only=True)
     storage_data = PCPartSerializer(source='storage', read_only=True)
+    storage2_data = PCPartSerializer(source='storage2', read_only=True)
+    storage3_data = PCPartSerializer(source='storage3', read_only=True)
+    os_data = PCPartSerializer(source='os', read_only=True)
     psu_data = PCPartSerializer(source='psu', read_only=True)
     case_data = PCPartSerializer(source='case', read_only=True)
     
@@ -26,8 +29,8 @@ class ConfigurationSerializer(serializers.ModelSerializer):
         model = Configuration
         fields = [
             'id', 'budget', 'usage', 'usage_display', 'total_price',
-            'cpu', 'cpu_cooler', 'gpu', 'motherboard', 'memory', 'storage', 'psu', 'case',
-            'cpu_data', 'cpu_cooler_data', 'gpu_data', 'motherboard_data', 'memory_data', 'storage_data', 'psu_data', 'case_data',
+            'cpu', 'cpu_cooler', 'gpu', 'motherboard', 'memory', 'storage', 'storage2', 'storage3', 'os', 'psu', 'case',
+            'cpu_data', 'cpu_cooler_data', 'gpu_data', 'motherboard_data', 'memory_data', 'storage_data', 'storage2_data', 'storage3_data', 'os_data', 'psu_data', 'case_data',
             'created_at'
         ]
         read_only_fields = ['id', 'total_price', 'created_at']

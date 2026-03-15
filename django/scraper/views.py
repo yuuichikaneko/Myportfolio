@@ -1,4 +1,5 @@
 import re
+from collections import defaultdict
 
 from rest_framework import viewsets, status
 from django.db.models import Min, Max, Avg, Count as DbCount
@@ -10,7 +11,7 @@ from .models import PCPart, Configuration, ScraperStatus
 from .serializers import PCPartSerializer, ConfigurationSerializer, ScraperStatusSerializer
 
 
-PART_ORDER = ['cpu', 'cpu_cooler', 'gpu', 'motherboard', 'memory', 'storage', 'psu', 'case']
+PART_ORDER = ['cpu', 'cpu_cooler', 'gpu', 'motherboard', 'memory', 'storage', 'os', 'psu', 'case']
 USAGE_POWER_MAP = {
     'gaming': 550,    # ゲーミング: GPU高負荷
     'creator': 500,   # クリエイター: CPU+GPU高負荷
@@ -26,7 +27,8 @@ USAGE_BUDGET_WEIGHTS = {
         'gpu': 0.48,
         'motherboard': 0.09,
         'memory': 0.08,
-        'storage': 0.06,
+        'storage': 0.05,
+        'os': 0.04,
         'psu': 0.05,
         'case': 0.00,
     },
@@ -37,7 +39,8 @@ USAGE_BUDGET_WEIGHTS = {
         'gpu': 0.18,
         'motherboard': 0.10,
         'memory': 0.16,
-        'storage': 0.14,
+        'storage': 0.11,
+        'os': 0.05,
         'psu': 0.06,
         'case': 0.03,
     },
@@ -48,7 +51,8 @@ USAGE_BUDGET_WEIGHTS = {
         'gpu': 0.08,
         'motherboard': 0.15,
         'memory': 0.18,
-        'storage': 0.20,
+        'storage': 0.17,
+        'os': 0.06,
         'psu': 0.08,
         'case': 0.04,
     },
@@ -58,8 +62,9 @@ USAGE_BUDGET_WEIGHTS = {
         'cpu_cooler': 0.04,
         'gpu': 0.16,
         'motherboard': 0.14,
-        'memory': 0.14,
-        'storage': 0.14,
+        'memory': 0.13,
+        'storage': 0.11,
+        'os': 0.04,
         'psu': 0.10,
         'case': 0.08,
     },
@@ -70,7 +75,14 @@ USAGE_BUDGET_WEIGHTS = {
 CREATOR_FLAGSHIP_BUDGET_THRESHOLD = 900000
 CREATOR_FLAGSHIP_GPU_BUDGET_CAP = 0.75
 
-CATEGORY_DROP_PRIORITY = ['case', 'psu', 'storage', 'memory', 'cpu_cooler', 'motherboard', 'gpu', 'cpu']
+CATEGORY_DROP_PRIORITY = ['case', 'storage', 'memory', 'cpu_cooler', 'motherboard', 'psu', 'gpu', 'cpu']
+
+UPGRADE_PRIORITY_BY_USAGE = {
+    'gaming':   ['gpu', 'cpu', 'cpu_cooler', 'memory', 'storage', 'motherboard', 'psu', 'case'],
+    'creator':  ['cpu', 'gpu', 'memory', 'storage', 'cpu_cooler', 'motherboard', 'psu', 'case'],
+    'business': ['cpu', 'memory', 'storage', 'motherboard', 'cpu_cooler', 'psu', 'case'],
+    'standard': ['cpu', 'memory', 'storage', 'motherboard', 'cpu_cooler', 'psu', 'case'],
+}
 
 # 内蔵GPU(iGPU)使用: ビジネス・スタンダードはdGPU不要
 IGPU_USAGES = frozenset({'business', 'standard'})
@@ -82,7 +94,8 @@ IGPU_BUDGET_WEIGHTS = {
         'cpu_cooler': 0.05,
         'motherboard': 0.17,
         'memory': 0.20,
-        'storage': 0.21,
+        'storage': 0.17,
+        'os': 0.08,
         'psu': 0.08,
         'case': 0.04,
     },
@@ -91,7 +104,8 @@ IGPU_BUDGET_WEIGHTS = {
         'cpu_cooler': 0.06,
         'motherboard': 0.18,
         'memory': 0.18,
-        'storage': 0.16,
+        'storage': 0.12,
+        'os': 0.06,
         'psu': 0.10,
         'case': 0.08,
     },
@@ -123,6 +137,11 @@ COOLING_PROFILE_KEYWORDS = {
     'performance': ['high performance', 'extreme', 'oc', 'overclock', 'ハイパフォーマンス'],
 }
 
+CASE_FAN_POLICY_KEYWORDS = {
+    'silent': ['静音', 'silent', 'low noise', 'be quiet', 'define', 'p12 pwm pst', 'f12 silent'],
+    'airflow': ['airflow', 'mesh', 'high airflow', 'high static pressure', 'p14', '140mm', '200mm', 'front mesh'],
+}
+
 CASE_SIZE_KEYWORDS = {
     'mini': ['mini-itx', 'mini itx', 'itx', 'sff', '小型', 'コンパクト', 'mini tower'],
     'mid': ['mid tower', 'ミドルタワー', 'micro-atx', 'micro atx', 'matx', 'atx'],
@@ -138,6 +157,8 @@ GAMING_SPEC_GPU_KEYWORDS = (
     'rtx',
     'radeon rx',
 )
+
+GAMING_CPU_X3D_PATTERN = re.compile(r'\b(?:ryzen\s*[3579]\s*)?\d{4,5}x3d\b', re.IGNORECASE)
 
 RADIATOR_SIZE_VALUES = (120, 140, 240, 280, 360, 420)
 
@@ -204,6 +225,14 @@ def _normalize_case_size(value):
     return 'any'
 
 
+def _normalize_case_fan_policy(value):
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {'silent', 'airflow'}:
+            return normalized
+    return 'auto'
+
+
 def _normalize_cpu_vendor(value):
     if isinstance(value, str):
         normalized = value.strip().lower()
@@ -218,6 +247,37 @@ def _normalize_build_priority(value):
         if normalized in {'cost', 'spec'}:
             return normalized
     return 'balanced'
+
+
+def _normalize_storage_preference(value):
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {'ssd', 'hdd'}:
+            return normalized
+    return 'ssd'
+
+
+def _normalize_os_edition(value):
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {'auto', 'home', 'pro'}:
+            return normalized
+    return 'auto'
+
+
+def _resolve_os_edition_by_usage(usage, os_edition):
+    if os_edition != 'auto':
+        return os_edition
+
+    auto_map = {
+        'gaming': 'home',
+        'standard': 'home',
+        'general': 'home',
+        'creator': 'pro',
+        'business': 'pro',
+        'video_editing': 'pro',
+    }
+    return auto_map.get(usage, 'home')
 
 
 def _normalize_custom_budget_weights(value):
@@ -246,15 +306,63 @@ def _normalize_custom_budget_weights(value):
     return {part_type: weight / total for part_type, weight in normalized.items()}
 
 
-def _normalize_selection_options(cooler_type, radiator_size, cooling_profile, case_size, cpu_vendor, build_priority):
+def _normalize_optional_storage_part_id(value):
+    if value in (None, ''):
+        return None
+    try:
+        normalized = int(value)
+    except (TypeError, ValueError):
+        return None
+    return normalized if normalized > 0 else None
+
+
+def _normalize_min_storage_capacity_gb(value):
+    if value in (None, ''):
+        return None
+    try:
+        normalized = int(value)
+    except (TypeError, ValueError):
+        return None
+    if normalized not in {512, 1024, 2048, 4096}:
+        return None
+    return normalized
+
+
+def _resolve_storage_part_by_id(part_id):
+    normalized = _normalize_optional_storage_part_id(part_id)
+    if normalized is None:
+        return None
+    try:
+        return PCPart.objects.get(id=normalized, part_type='storage')
+    except PCPart.DoesNotExist:
+        return None
+
+
+def _normalize_selection_options(cooler_type, radiator_size, cooling_profile, case_size, case_fan_policy, cpu_vendor, build_priority, os_edition, storage_preference, min_storage_capacity_gb=None):
     return {
         'cooler_type': _normalize_cooler_type(cooler_type),
         'radiator_size': _normalize_radiator_size(radiator_size),
         'cooling_profile': _normalize_cooling_profile(cooling_profile),
         'case_size': _normalize_case_size(case_size),
+        'case_fan_policy': _normalize_case_fan_policy(case_fan_policy),
         'cpu_vendor': _normalize_cpu_vendor(cpu_vendor),
         'build_priority': _normalize_build_priority(build_priority),
+        'os_edition': _normalize_os_edition(os_edition),
+        'storage_preference': _normalize_storage_preference(storage_preference),
+        'min_storage_capacity_gb': _normalize_min_storage_capacity_gb(min_storage_capacity_gb),
     }
+
+
+def _is_os_edition_match(part, os_edition):
+    if os_edition == 'auto':
+        return True
+
+    text = f"{part.name} {part.url}".lower()
+    if os_edition == 'home':
+        return 'home' in text
+    if os_edition == 'pro':
+        return ' pro ' in f' {text} ' or 'windows 11 pro' in text
+    return True
 
 
 def _is_cpu_cooler_type_match(part, cooler_type):
@@ -306,6 +414,104 @@ def _cpu_cooler_profile_score(part, cooling_profile, cooler_type):
     return score
 
 
+def _case_fan_policy_score(part, case_fan_policy):
+    if case_fan_policy == 'auto':
+        return 0
+
+    text = f"{part.name} {part.url}".lower()
+    score = 0
+    for keyword in CASE_FAN_POLICY_KEYWORDS.get(case_fan_policy, []):
+        if keyword in text:
+            score += 2
+
+    # 仕様情報がある場合は追加加点
+    specs = getattr(part, 'specs', {}) or {}
+    max_radiator_mm = _extract_numeric_radiator_size(specs.get('max_radiator_mm'))
+    included_fan_count = _extract_numeric_fan_count(specs.get('included_fan_count'))
+    supported_fan_count = _extract_numeric_fan_count(specs.get('supported_fan_count'))
+    front_fan_slots = _extract_numeric_fan_count(specs.get('front_fan_slots'))
+    top_fan_slots = _extract_numeric_fan_count(specs.get('top_fan_slots'))
+    rear_fan_slots = _extract_numeric_fan_count(specs.get('rear_fan_slots'))
+
+    # 付属ファンなしケースは方針不一致として強く減点
+    if included_fan_count == 0:
+        score -= 6
+    elif included_fan_count is None:
+        if any(keyword in text for keyword in ('ファン非搭載', 'ファンなし', 'ファン別売', 'fanless', 'without fan')):
+            score -= 6
+
+    # 同梱ファン数を優先評価
+    if included_fan_count is not None:
+        if included_fan_count >= 4:
+            score += 5
+        elif included_fan_count == 3:
+            score += 4
+        elif included_fan_count == 2:
+            score += 2
+        elif included_fan_count == 1:
+            score += 1
+
+    # 搭載可能ファン数は冷却重視でより強く評価
+    if supported_fan_count is not None:
+        if case_fan_policy == 'airflow':
+            if supported_fan_count >= 10:
+                score += 5
+            elif supported_fan_count >= 8:
+                score += 4
+            elif supported_fan_count >= 6:
+                score += 3
+            elif supported_fan_count >= 4:
+                score += 1
+        elif case_fan_policy == 'silent':
+            if supported_fan_count >= 7:
+                score += 2
+            elif supported_fan_count >= 5:
+                score += 1
+
+    # 前面/上面/背面スロットがある場合は airflow を段階的に強化
+    if case_fan_policy == 'airflow':
+        weighted_slots = (
+            (front_fan_slots or 0) * 1.8
+            + (top_fan_slots or 0) * 1.3
+            + (rear_fan_slots or 0) * 1.0
+        )
+        if weighted_slots >= 10:
+            score += 6
+        elif weighted_slots >= 7:
+            score += 4
+        elif weighted_slots >= 5:
+            score += 2
+
+        if (front_fan_slots or 0) >= 3:
+            score += 3
+        elif (front_fan_slots or 0) >= 2:
+            score += 1
+
+        if (top_fan_slots or 0) >= 3:
+            score += 2
+        elif (top_fan_slots or 0) >= 2:
+            score += 1
+
+        if (rear_fan_slots or 0) >= 1:
+            score += 1
+    elif case_fan_policy == 'silent':
+        # 静音重視は最低限の吸排気を評価し、過多なトップ排気は軽く抑制
+        if (front_fan_slots or 0) >= 2:
+            score += 1
+        if (rear_fan_slots or 0) >= 1:
+            score += 1
+        if (top_fan_slots or 0) >= 4:
+            score -= 1
+
+    if case_fan_policy == 'airflow' and max_radiator_mm:
+        if max_radiator_mm >= 360:
+            score += 2
+        elif max_radiator_mm >= 240:
+            score += 1
+
+    return score
+
+
 def _is_case_size_match(part, case_size):
     if case_size == 'any':
         return True
@@ -348,7 +554,21 @@ def _is_gaming_spec_gpu_preferred(part):
     return re.search(r'\brx\s*\d{3,4}\b', text) is not None
 
 
+def _is_gaming_cpu_x3d_preferred(part):
+    text = f"{part.name} {part.url}".lower()
+    if 'ryzen' not in text and 'amd' not in text:
+        return False
+    return GAMING_CPU_X3D_PATTERN.search(text) is not None
+
+
 def _extract_numeric_radiator_size(value):
+    try:
+        return int(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _extract_numeric_fan_count(value):
     try:
         return int(str(value))
     except (TypeError, ValueError):
@@ -405,14 +625,180 @@ def _is_case_radiator_compatible(part, radiator_size):
     return any(size >= requested for size in supported)
 
 
+def _infer_motherboard_form_factor(part):
+    """マザーボードのフォームファクターを推定する: 'eatx' / 'atx' / 'micro-atx' / 'mini-itx' / 'unknown'"""
+    text = f"{getattr(part, 'name', '')} {getattr(part, 'url', '')}".lower()
+    form_factor = str(_get_spec(part, 'form_factor', '') or '').lower()
+    combined = f"{text} {form_factor}"
+    if any(kw in combined for kw in ('e-atx', 'eatx', 'extended atx')):
+        return 'eatx'
+    if any(kw in combined for kw in ('mini-itx', 'mini itx', 'mitx')):
+        return 'mini-itx'
+    if any(kw in combined for kw in ('micro-atx', 'micro atx', 'microatx', 'matx', 'm-atx')):
+        return 'micro-atx'
+    if 'atx' in combined:
+        return 'atx'
+    return 'unknown'
+
+
+def _preferred_motherboard_form_factors(case_size):
+    if case_size == 'full':
+        return ('eatx', 'atx')
+    if case_size == 'mid':
+        return ('atx', 'eatx')
+    if case_size == 'mini':
+        return ('mini-itx',)
+    return tuple()
+
+
+def _prefer_motherboard_candidates(candidates, case_size):
+    preferred_form_factors = _preferred_motherboard_form_factors(case_size)
+    if not preferred_form_factors:
+        return candidates
+
+    preferred_candidates = [
+        part for part in candidates
+        if _infer_motherboard_form_factor(part) in preferred_form_factors
+    ]
+    return preferred_candidates or candidates
+
+
+def _infer_cpu_power_w(part):
+    if not part:
+        return 0
+
+    try:
+        tdp_w = int(_get_spec(part, 'tdp_w', 0) or 0)
+    except (TypeError, ValueError):
+        tdp_w = 0
+    if tdp_w > 0:
+        return tdp_w
+
+    text = f"{getattr(part, 'name', '')} {getattr(part, 'url', '')}".lower()
+    for watts in (170, 125, 105, 95, 65, 35):
+        if f'{watts}w' in text:
+            return watts
+    return 95
+
+
+GPU_POWER_RULES = (
+    (r'rtx\s*5090', 575),
+    (r'rtx\s*5080', 360),
+    (r'rtx\s*5070\s*ti', 300),
+    (r'rtx\s*5070', 250),
+    (r'rtx\s*5060\s*ti', 180),
+    (r'rtx\s*5060', 150),
+    (r'rtx\s*5050', 130),
+    (r'rtx\s*3050', 70),
+    (r'rx\s*9070\s*xt', 320),
+    (r'rx\s*9070', 260),
+    (r'rx\s*9060\s*xt', 190),
+    (r'rx\s*6400', 55),
+    (r'arc\s*b580', 190),
+    (r'arc\s*b570', 150),
+    (r'arc\s*a310', 50),
+)
+
+
+def _infer_gpu_power_w(part):
+    if not part:
+        return 0
+
+    try:
+        tdp_w = int(_get_spec(part, 'tdp_w', 0) or 0)
+    except (TypeError, ValueError):
+        tdp_w = 0
+    if tdp_w > 0:
+        return tdp_w
+
+    text = f"{getattr(part, 'name', '')} {getattr(part, 'url', '')}".lower()
+    for pattern, watts in GPU_POWER_RULES:
+        if re.search(pattern, text):
+            return watts
+
+    return 180
+
+
+def _estimate_system_power_w(selected_parts, usage):
+    cpu = selected_parts.get('cpu')
+    gpu = selected_parts.get('gpu')
+    cpu_cooler = selected_parts.get('cpu_cooler')
+    motherboard = selected_parts.get('motherboard')
+    memory = selected_parts.get('memory')
+    storage_parts = [selected_parts.get('storage')]
+    for key in ('storage2', 'storage3'):
+        if selected_parts.get(key):
+            storage_parts.append(selected_parts.get(key))
+
+    cpu_power = _infer_cpu_power_w(cpu)
+    gpu_power = _infer_gpu_power_w(gpu)
+    motherboard_power = 45 if motherboard else 0
+    memory_power = 10 if memory else 0
+
+    storage_power = 0
+    for storage_part in storage_parts:
+        if not storage_part:
+            continue
+        media_type = _infer_storage_media_type(storage_part)
+        storage_power += 12 if media_type == 'hdd' else 6
+
+    cooler_text = f"{getattr(cpu_cooler, 'name', '')} {getattr(cpu_cooler, 'url', '')}".lower()
+    if cpu_cooler:
+        cooler_power = 20 if any(token in cooler_text for token in ('水冷', 'aio', '360', '280', '240')) else 8
+    else:
+        cooler_power = 0
+
+    case_power = 10 if selected_parts.get('case') else 0
+
+    estimated = cpu_power + gpu_power + motherboard_power + memory_power + storage_power + cooler_power + case_power
+    if estimated <= 0:
+        return IGPU_POWER_MAP.get(usage, USAGE_POWER_MAP.get(usage, 300)) if usage in IGPU_USAGES else USAGE_POWER_MAP.get(usage, 400)
+    return estimated
+
+
+def _recommended_psu_floor_w(selected_parts, usage):
+    gpu_power = _infer_gpu_power_w(selected_parts.get('gpu'))
+    cpu_power = _infer_cpu_power_w(selected_parts.get('cpu'))
+
+    if gpu_power >= 550:
+        return 1200
+    if gpu_power >= 350:
+        return 1000
+    if gpu_power >= 300:
+        return 1000 if usage in {'gaming', 'creator'} else 850
+    if gpu_power >= 250:
+        return 850
+    if gpu_power >= 180:
+        return 750
+    if cpu_power >= 170:
+        return 750
+    if gpu_power > 0 or cpu_power > 0:
+        return 650
+    return 0
+
+
+def _required_psu_wattage(selected_parts, usage):
+    estimated = _estimate_system_power_w(selected_parts, usage)
+    cpu_gpu_total = _infer_cpu_power_w(selected_parts.get('cpu')) + _infer_gpu_power_w(selected_parts.get('gpu'))
+    required = max(
+        int(estimated * 1.25),
+        estimated + 100,
+        cpu_gpu_total + 100,
+        _recommended_psu_floor_w(selected_parts, usage),
+    )
+    return int(((required + 49) // 50) * 50)
+
+
 def _pick_part_by_target(part_type, budget, usage, weights_override=None, options=None):
     options = options or {}
     cooler_type = options.get('cooler_type', 'any')
     radiator_size = options.get('radiator_size', 'any')
     cooling_profile = options.get('cooling_profile', 'balanced')
     case_size = options.get('case_size', 'any')
+    case_fan_policy = options.get('case_fan_policy', 'auto')
     cpu_vendor = options.get('cpu_vendor', 'any')
     build_priority = options.get('build_priority', 'balanced')
+    storage_preference = options.get('storage_preference', 'ssd')
     motherboard_memory_type = str(options.get('motherboard_memory_type', '') or '').upper()
     min_storage_capacity_gb = options.get('min_storage_capacity_gb')
 
@@ -443,6 +829,7 @@ def _pick_part_by_target(part_type, budget, usage, weights_override=None, option
             socket_filtered = [p for p in candidates if _get_spec(p, 'socket') == cpu_socket]
             if socket_filtered:
                 candidates = socket_filtered
+        candidates = _prefer_motherboard_candidates(candidates, case_size)
     elif part_type == 'memory':
         if motherboard_memory_type:
             mem_type_filtered = [
@@ -490,6 +877,10 @@ def _pick_part_by_target(part_type, budget, usage, weights_override=None, option
 
     within_target = [p for p in candidates if p.price <= target_price]
     if within_target:
+        if part_type == 'cpu' and usage == 'gaming' and cpu_vendor != 'intel':
+            preferred_x3d = [p for p in within_target if _is_gaming_cpu_x3d_preferred(p)]
+            if preferred_x3d:
+                within_target = preferred_x3d
         if part_type == 'memory':
             # gaming + spec はGPU優先のため、メモリは目標価格内から選ぶ。
             # それ以外の spec では、候補全体から上位メモリを選んでもよい。
@@ -500,8 +891,23 @@ def _pick_part_by_target(part_type, budget, usage, weights_override=None, option
             profiled = _memory_profile_pick(memory_pool, build_priority)
             if profiled:
                 return profiled
+        if part_type == 'storage':
+            profiled = _storage_profile_pick(within_target, build_priority, storage_preference)
+            if profiled:
+                return profiled
         if build_priority == 'spec' and part_type == 'motherboard':
             return candidates[-1]
+        if part_type == 'case' and case_fan_policy != 'auto':
+            if build_priority == 'cost':
+                return sorted(
+                    within_target,
+                    key=lambda p: (-_case_fan_policy_score(p, case_fan_policy), p.price),
+                )[0]
+            return sorted(
+                within_target,
+                key=lambda p: (_case_fan_policy_score(p, case_fan_policy), p.price),
+                reverse=True,
+            )[0]
         if build_priority == 'cost':
             return within_target[0]
         if part_type == 'cpu_cooler':
@@ -513,10 +919,23 @@ def _pick_part_by_target(part_type, budget, usage, weights_override=None, option
         return sorted(within_target, key=lambda p: p.price, reverse=True)[0]
 
     if build_priority == 'cost':
+        if part_type == 'cpu' and usage == 'gaming' and cpu_vendor != 'intel':
+            preferred_x3d = [p for p in candidates if _is_gaming_cpu_x3d_preferred(p)]
+            if preferred_x3d:
+                return preferred_x3d[0]
         if part_type == 'memory':
             profiled = _memory_profile_pick(candidates, build_priority)
             if profiled:
                 return profiled
+        if part_type == 'storage':
+            profiled = _storage_profile_pick(candidates, build_priority, storage_preference)
+            if profiled:
+                return profiled
+        if part_type == 'case' and case_fan_policy != 'auto':
+            return sorted(
+                candidates,
+                key=lambda p: (-_case_fan_policy_score(p, case_fan_policy), p.price),
+            )[0]
         return candidates[0]
 
     if part_type == 'cpu_cooler':
@@ -536,6 +955,16 @@ def _pick_part_by_target(part_type, budget, usage, weights_override=None, option
         profiled = _memory_profile_pick(candidates, build_priority)
         if profiled:
             return profiled
+
+    if part_type == 'storage':
+        profiled = _storage_profile_pick(candidates, build_priority, storage_preference)
+        if profiled:
+            return profiled
+
+    if part_type == 'cpu' and usage == 'gaming' and cpu_vendor != 'intel':
+        preferred_x3d = [p for p in candidates if _is_gaming_cpu_x3d_preferred(p)]
+        if preferred_x3d:
+            return preferred_x3d[-1] if build_priority == 'spec' else preferred_x3d[0]
 
     if build_priority == 'spec':
         return candidates[-1]
@@ -665,21 +1094,194 @@ def _memory_profile_pick(candidates, build_priority):
     return None
 
 
+def _target_memory_capacity_gb(budget, usage, options=None):
+    options = options or {}
+    build_priority = options.get('build_priority')
+
+    if usage == 'creator':
+        if budget >= 500000:
+            return 64
+        if budget >= 250000:
+            return 32
+        return 16
+
+    if usage == 'gaming':
+        if budget >= 1000000:
+            return 64
+        if budget >= 400000:
+            return 32
+        return 16
+
+    if usage in {'business', 'standard'}:
+        if budget >= 300000 or build_priority == 'spec':
+            return 32
+        return 16
+
+    return 16
+
+
+def _upgrade_memory_to_capacity_target(selected_parts, total_price, budget, usage, options=None):
+    options = options or {}
+    memory = selected_parts.get('memory')
+    if not memory:
+        return selected_parts, total_price
+
+    current_capacity = _infer_memory_capacity_gb(memory)
+    target_capacity = _target_memory_capacity_gb(budget, usage, options=options)
+    if current_capacity >= target_capacity:
+        return selected_parts, total_price
+
+    affordable_max_price = memory.price + max(0, budget - total_price)
+    if affordable_max_price <= memory.price:
+        return selected_parts, total_price
+
+    candidates = [
+        p
+        for p in PCPart.objects.filter(part_type='memory').order_by('price')
+        if _is_part_suitable('memory', p)
+        and _matches_selection_options('memory', p, options=options)
+        and memory.price < p.price <= affordable_max_price
+        and _infer_memory_capacity_gb(p) >= target_capacity
+    ]
+    if not candidates:
+        return selected_parts, total_price
+
+    upgraded_memory = sorted(
+        candidates,
+        key=lambda p: (
+            _infer_memory_capacity_gb(p),
+            _infer_memory_type(p) == 'DDR5',
+            -p.price,
+        ),
+    )[0]
+
+    adjusted = dict(selected_parts)
+    adjusted['memory'] = upgraded_memory
+    return adjusted, _sum_selected_price(adjusted)
+
+
 def _infer_storage_capacity_gb(part):
     capacity = int(_get_spec(part, 'capacity_gb', 0) or 0)
     if capacity > 0:
         return capacity
 
     text = f"{getattr(part, 'name', '')} {getattr(part, 'url', '')}"
-    match = re.search(r"(\d+(?:\.\d+)?)\s*(TB|GB)", text, re.IGNORECASE)
-    if not match:
-        return 0
+    # TB単位を優先して検索し、モデル番号埋め込み (例: "F20GB") を除外するため負の後読みを使用
+    tb_match = re.search(r'(?<![A-Za-z0-9])(\d+(?:\.\d+)?)\s*TB', text, re.IGNORECASE)
+    if tb_match:
+        return int(float(tb_match.group(1)) * 1024)
+    gb_match = re.search(r'(?<![A-Za-z0-9])(\d+(?:\.\d+)?)\s*GB', text, re.IGNORECASE)
+    if gb_match:
+        return int(float(gb_match.group(1)))
+    return 0
 
-    value = float(match.group(1))
-    unit = match.group(2).upper()
-    if unit == 'TB':
-        return int(value * 1024)
-    return int(value)
+
+def _infer_storage_media_type(part):
+    media_type = str(_get_spec(part, 'media_type', '') or '').strip().lower()
+    if media_type in {'ssd', 'hdd'}:
+        return media_type
+
+    name_text = str(getattr(part, 'name', '') or '').lower()
+    form_factor = str(_get_spec(part, 'form_factor', '') or '').strip().lower()
+    interface = _infer_storage_interface(part)
+
+    if interface == 'nvme':
+        return 'ssd'
+    # SSD キーワード・フォームファクター・名前中の M.2
+    if 'ssd' in name_text or form_factor in {'m.2', '2.5inch'}:
+        return 'ssd'
+    if 'm.2' in name_text:
+        return 'ssd'
+    # WD SSD モデル番号 (SA500=SATA, SN500/580/700/750/850=NVMe)
+    if re.search(r'\b(sa500|sn500|sn580|sn700|sn750|sn850)\b', name_text):
+        return 'ssd'
+    if re.search(r'(5400|7200|10000|15000)\s*rpm', name_text, re.IGNORECASE):
+        return 'hdd'
+
+    # HDD キーワードは "wd red" 単体を除外し "wd red wd" 等の HDDのみに絞る
+    hdd_keywords = (
+        'barracuda',
+        'ironwolf',
+        'wd blue wd',
+        'wd green wd',
+        'wd red wd',
+        'wd purple wd',
+        'mq04',
+        'dt02',
+        'n300',
+        'mg10',
+        'mg11',
+        'hat3300',
+        'hdd',
+    )
+    if any(keyword in name_text for keyword in hdd_keywords):
+        return 'hdd'
+    if interface == 'sata' and form_factor == '3.5inch':
+        return 'hdd'
+    if interface == 'sata' and form_factor in {'2.5inch', 'm.2'}:
+        return 'ssd'
+    return 'other'
+
+
+def _storage_profile_pick(candidates, build_priority, storage_preference='ssd'):
+    if not candidates:
+        return None
+
+    prefer_hdd = storage_preference == 'hdd'
+
+    def _media_rank(part):
+        media_type = _infer_storage_media_type(part)
+        if media_type == ('hdd' if prefer_hdd else 'ssd'):
+            return 0
+        if media_type == ('ssd' if prefer_hdd else 'hdd'):
+            return 1
+        if media_type == 'other':
+            return 2
+        return 3
+
+    def _interface_rank(part):
+        interface = _infer_storage_interface(part)
+        if interface == 'nvme':
+            return 0
+        if interface == 'sata':
+            return 1
+        return 2
+
+    def _capacity(part):
+        return _infer_storage_capacity_gb(part)
+
+    if build_priority == 'cost':
+        return sorted(
+            candidates,
+            key=lambda p: (
+                _media_rank(p),
+                p.price,
+                _interface_rank(p),
+                -_capacity(p),
+            ),
+        )[0]
+
+    if build_priority == 'spec':
+        return sorted(
+            candidates,
+            key=lambda p: (
+                _media_rank(p),
+                _interface_rank(p),
+                -_capacity(p),
+                -p.price,
+            ),
+        )[0]
+
+    return sorted(
+        candidates,
+        key=lambda p: (
+            _media_rank(p),
+            _interface_rank(p),
+            0 if _capacity(p) >= 1000 else 1,
+            -_capacity(p),
+            p.price,
+        ),
+    )[0]
 
 
 def _required_power_w(usage):
@@ -714,8 +1316,9 @@ def _compatibility_issues(selected_parts, usage, options=None):
         issues.append('memory_type_mismatch')
 
     psu_watt = _get_spec(psu, 'wattage')
+    required_psu_wattage = options.get('required_psu_wattage') or _required_psu_wattage(selected_parts, usage)
     if psu and psu_watt:
-        if int(psu_watt) < _required_power_w(usage):
+        if int(psu_watt) < int(required_psu_wattage):
             issues.append('psu_too_weak')
 
     mb_form = _get_spec(motherboard, 'form_factor')
@@ -748,9 +1351,11 @@ def _matches_selection_options(part_type, part, options=None):
     radiator_size = options.get('radiator_size', 'any')
     case_size = options.get('case_size', 'any')
     cpu_vendor = options.get('cpu_vendor', 'any')
+    os_edition = options.get('os_edition', 'auto')
     motherboard_memory_type = str(options.get('motherboard_memory_type', '') or '').upper()
     min_storage_capacity_gb = options.get('min_storage_capacity_gb')
     require_preferred_gaming_gpu = options.get('require_preferred_gaming_gpu', False)
+    required_psu_wattage = options.get('required_psu_wattage')
 
     if part_type == 'cpu_cooler':
         if not _is_cpu_cooler_type_match(part, cooler_type):
@@ -780,6 +1385,17 @@ def _matches_selection_options(part_type, part, options=None):
             mb_socket = _get_spec(part, 'socket')
             if mb_socket and mb_socket != cpu_socket:
                 return False
+        current_case_size = options.get('case_size', 'any')
+        preferred_form_factors = _preferred_motherboard_form_factors(current_case_size)
+        if preferred_form_factors:
+            available_candidates = [
+                candidate for candidate in PCPart.objects.filter(part_type='motherboard')
+                if _is_part_suitable('motherboard', candidate)
+                and (not cpu_socket or _get_spec(candidate, 'socket') == cpu_socket)
+                and _infer_motherboard_form_factor(candidate) in preferred_form_factors
+            ]
+            if available_candidates and _infer_motherboard_form_factor(part) not in preferred_form_factors:
+                return False
         return True
 
     if part_type == 'memory':
@@ -795,6 +1411,18 @@ def _matches_selection_options(part_type, part, options=None):
             if capacity_gb < int(min_storage_capacity_gb):
                 return False
         return True
+
+    if part_type == 'psu':
+        if required_psu_wattage is None:
+            return True
+        try:
+            wattage = int(_get_spec(part, 'wattage', 0) or 0)
+        except (TypeError, ValueError):
+            wattage = 0
+        return wattage >= int(required_psu_wattage)
+
+    if part_type == 'os':
+        return _is_os_edition_match(part, os_edition)
 
     return True
 
@@ -817,7 +1445,12 @@ def _resolve_compatibility(selected_parts, usage, options=None):
             mb_socket = _get_spec(motherboard, 'socket')
             replaced = False
             if cpu_socket:
-                new_mb = _pick_candidate('motherboard', lambda p: _get_spec(p, 'socket') == cpu_socket)
+                motherboard_candidates = [
+                    candidate for candidate in PCPart.objects.filter(part_type='motherboard').order_by('price')
+                    if _is_part_suitable('motherboard', candidate) and _get_spec(candidate, 'socket') == cpu_socket
+                ]
+                motherboard_candidates = _prefer_motherboard_candidates(motherboard_candidates, case_size)
+                new_mb = motherboard_candidates[0] if motherboard_candidates else None
                 if new_mb:
                     selected_parts['motherboard'] = new_mb
                     replaced = True
@@ -848,7 +1481,12 @@ def _resolve_compatibility(selected_parts, usage, options=None):
                     if _cpu_socket and p_socket and p_socket != _cpu_socket:
                         return False
                     return True
-                new_mb = _pick_candidate('motherboard', _mb_fits_mem)
+                motherboard_candidates = [
+                    candidate for candidate in PCPart.objects.filter(part_type='motherboard').order_by('price')
+                    if _is_part_suitable('motherboard', candidate) and _mb_fits_mem(candidate)
+                ]
+                motherboard_candidates = _prefer_motherboard_candidates(motherboard_candidates, case_size)
+                new_mb = motherboard_candidates[0] if motherboard_candidates else None
                 if new_mb:
                     selected_parts['motherboard'] = new_mb
                 else:
@@ -857,10 +1495,12 @@ def _resolve_compatibility(selected_parts, usage, options=None):
                 break
 
         elif issue == 'psu_too_weak':
-            required_w = _required_power_w(usage)
-            new_psu = _pick_candidate('psu', lambda p: int(_get_spec(p, 'wattage', 0)) >= required_w)
+            required_w = options.get('required_psu_wattage') or _required_psu_wattage(selected_parts, usage)
+            new_psu = _pick_candidate('psu', lambda p: int(_get_spec(p, 'wattage', 0)) >= int(required_w))
             if new_psu:
                 selected_parts['psu'] = new_psu
+                options = dict(options)
+                options['required_psu_wattage'] = _required_psu_wattage(selected_parts, usage)
             else:
                 break
 
@@ -1009,6 +1649,48 @@ def _upgrade_memory_with_surplus(selected_parts, total_price, budget, usage, opt
     return adjusted, _sum_selected_price(adjusted)
 
 
+def _upgrade_parts_with_surplus(selected_parts, total_price, budget, usage, options=None):
+    """余剰予算が大きい場合に優先度順でパーツをアップグレードし、予算を有効活用する。"""
+    options = options or {}
+    use_igpu = usage in IGPU_USAGES
+    upgrade_order = UPGRADE_PRIORITY_BY_USAGE.get(usage, list(PART_ORDER))
+
+    for _ in range(len(upgrade_order) * 4):
+        surplus = budget - total_price
+        if surplus < 5000:
+            break
+
+        upgraded = False
+        for part_type in upgrade_order:
+            if use_igpu and part_type == 'gpu':
+                continue
+            current = selected_parts.get(part_type)
+            if not current:
+                continue
+
+            affordable_max = current.price + surplus
+            better = None
+            for candidate in PCPart.objects.filter(
+                part_type=part_type,
+                price__gt=current.price,
+                price__lte=affordable_max,
+            ).order_by('-price'):
+                if _is_part_suitable(part_type, candidate) and _matches_selection_options(part_type, candidate, options=options):
+                    better = candidate
+                    break
+
+            if better:
+                total_price += better.price - current.price
+                selected_parts[part_type] = better
+                upgraded = True
+                break
+
+        if not upgraded:
+            break
+
+    return selected_parts, total_price
+
+
 def _rebalance_gaming_spec_gpu_memory(selected_parts, budget, usage, options=None):
     options = options or {}
     if usage != 'gaming' or options.get('build_priority') != 'spec':
@@ -1089,6 +1771,8 @@ def _rebalance_gaming_spec_gpu_memory(selected_parts, budget, usage, options=Non
             socket_filtered = [p for p in motherboard_candidates if _get_spec(p, 'socket') == cpu_socket]
             if socket_filtered:
                 motherboard_candidates = socket_filtered
+
+    motherboard_candidates = _prefer_motherboard_candidates(motherboard_candidates, options.get('case_size', 'any'))
 
     for gpu_candidate in reversed(_gpu_candidates(options)):
         for motherboard_candidate in motherboard_candidates:
@@ -1175,6 +1859,7 @@ def _apply_build_priority_weights(usage, build_priority, use_igpu, custom_budget
         'motherboard': 0.08,
         'memory': 0.05,
         'storage': 0.05,
+        'os': 0.04,
         'case': 0.00,
         'psu': 0.04,
         'cpu_cooler': 0.03,
@@ -1216,6 +1901,7 @@ def _refresh_selection_options_with_selected_parts(selection_options, selected_p
         else:
             updated.pop('motherboard_memory_type', None)
 
+    updated['required_psu_wattage'] = _required_psu_wattage(selected_parts, updated.get('usage', 'gaming'))
     return updated
 
 
@@ -1226,9 +1912,15 @@ def build_configuration_response(
     radiator_size='any',
     cooling_profile='balanced',
     case_size='any',
+    case_fan_policy='auto',
     cpu_vendor='any',
     build_priority='balanced',
+    storage_preference='ssd',
+    storage2_part_id=None,
+    storage3_part_id=None,
+    os_edition='auto',
     custom_budget_weights=None,
+    min_storage_capacity_gb=None,
 ):
     if not isinstance(budget, int) or budget < 50000 or budget > 1500000:
         return None, Response({'detail': 'budgetは50,000円以上1,500,000円以下で入力してください'}, status=status.HTTP_400_BAD_REQUEST)
@@ -1241,14 +1933,21 @@ def build_configuration_response(
         radiator_size=radiator_size,
         cooling_profile=cooling_profile,
         case_size=case_size,
+        case_fan_policy=case_fan_policy,
         cpu_vendor=cpu_vendor,
         build_priority=build_priority,
+        os_edition=os_edition,
+        storage_preference=storage_preference,
+        min_storage_capacity_gb=min_storage_capacity_gb,
     )
+    selection_options['usage'] = usage
+    selection_options['os_edition'] = _resolve_os_edition_by_usage(usage, selection_options['os_edition'])
 
     if usage == 'gaming' and selection_options.get('build_priority') == 'spec':
         # gaming + spec はストレージ容量を優先し、最低1TBを目標にする。
         selection_options = dict(selection_options)
-        selection_options['min_storage_capacity_gb'] = 1000
+        if not selection_options.get('min_storage_capacity_gb'):
+            selection_options['min_storage_capacity_gb'] = 1000
         selection_options['require_preferred_gaming_gpu'] = True
 
     normalized_custom_budget_weights = _normalize_custom_budget_weights(custom_budget_weights)
@@ -1285,6 +1984,9 @@ def build_configuration_response(
                 if mb_mem_type:
                     effective_options = dict(effective_options)
                     effective_options['motherboard_memory_type'] = mb_mem_type
+        if part_type == 'psu':
+            effective_options = dict(effective_options)
+            effective_options['required_psu_wattage'] = _required_psu_wattage(selected_parts, usage)
         part = _pick_part_by_target(
             part_type,
             budget,
@@ -1371,6 +2073,15 @@ def build_configuration_response(
     )
     total_price = _sum_selected_price(selected_parts)
 
+    selected_parts, total_price = _upgrade_memory_to_capacity_target(
+        selected_parts,
+        total_price,
+        budget,
+        usage,
+        options=selection_options,
+    )
+    selection_options = _refresh_selection_options_with_selected_parts(selection_options, selected_parts)
+
     selected_parts, total_price = _upgrade_memory_with_surplus(
         selected_parts,
         total_price,
@@ -1386,6 +2097,39 @@ def build_configuration_response(
     )
     total_price = _sum_selected_price(selected_parts)
 
+    extra_storage_parts = {}
+    selected_storage2 = _resolve_storage_part_by_id(storage2_part_id)
+    selected_storage3 = _resolve_storage_part_by_id(storage3_part_id)
+    if selected_storage2:
+        extra_storage_parts['storage2'] = selected_storage2
+        total_price += selected_storage2.price
+    if selected_storage3:
+        extra_storage_parts['storage3'] = selected_storage3
+        total_price += selected_storage3.price
+
+    # 予算の30%以上が余っている場合にパーツをアップグレードして予算をより有効活用する
+    if total_price < budget * 0.70:
+        selected_parts, total_price = _upgrade_parts_with_surplus(
+            selected_parts,
+            total_price,
+            budget,
+            usage,
+            options=selection_options,
+        )
+        selected_parts = _resolve_compatibility(selected_parts, usage, options=selection_options)
+        selection_options = _refresh_selection_options_with_selected_parts(selection_options, selected_parts)
+        total_price = _sum_selected_price(selected_parts)
+
+    selected_parts, total_price = _upgrade_memory_to_capacity_target(
+        selected_parts,
+        total_price,
+        budget,
+        usage,
+        options=selection_options,
+    )
+    selection_options = _refresh_selection_options_with_selected_parts(selection_options, selected_parts)
+    total_price = _sum_selected_price(selected_parts)
+
     selected = []
     for part_type in PART_ORDER:
         part = selected_parts.get(part_type)
@@ -1396,6 +2140,19 @@ def build_configuration_response(
             'name': part.name,
             'price': part.price,
             'url': part.url,
+            'specs': part.specs,
+        })
+
+    for part_type in ('storage2', 'storage3'):
+        part = extra_storage_parts.get(part_type)
+        if not part:
+            continue
+        selected.append({
+            'category': part_type,
+            'name': part.name,
+            'price': part.price,
+            'url': part.url,
+            'specs': part.specs,
         })
 
     # 内蔵GPU使用構成の場合: CPUの直後に統合グラフィックスエントリを挿入
@@ -1410,7 +2167,7 @@ def build_configuration_response(
         cpu_index = next((i for i, p in enumerate(selected) if p['category'] == 'cpu'), -1)
         selected.insert(cpu_index + 1, igpu_entry)
 
-    estimated_power = IGPU_POWER_MAP.get(usage, USAGE_POWER_MAP[usage]) if use_igpu else USAGE_POWER_MAP[usage]
+    estimated_power = _estimate_system_power_w({**selected_parts, **extra_storage_parts}, usage)
 
     configuration = Configuration.objects.create(
         budget=budget,
@@ -1422,6 +2179,9 @@ def build_configuration_response(
         motherboard=selected_parts.get('motherboard'),
         memory=selected_parts.get('memory'),
         storage=selected_parts.get('storage'),
+        storage2=extra_storage_parts.get('storage2'),
+        storage3=extra_storage_parts.get('storage3'),
+        os=selected_parts.get('os'),
         psu=selected_parts.get('psu'),
         case=selected_parts.get('case'),
     ) if use_igpu else Configuration.objects.create(
@@ -1434,6 +2194,9 @@ def build_configuration_response(
         motherboard=selected_parts.get('motherboard'),
         memory=selected_parts.get('memory'),
         storage=selected_parts.get('storage'),
+        storage2=extra_storage_parts.get('storage2'),
+        storage3=extra_storage_parts.get('storage3'),
+        os=selected_parts.get('os'),
         psu=selected_parts.get('psu'),
         case=selected_parts.get('case'),
     )
@@ -1445,8 +2208,11 @@ def build_configuration_response(
         'radiator_size': selection_options['radiator_size'],
         'cooling_profile': selection_options['cooling_profile'],
         'case_size': selection_options['case_size'],
+        'case_fan_policy': selection_options['case_fan_policy'],
         'cpu_vendor': selection_options['cpu_vendor'],
         'build_priority': selection_options['build_priority'],
+        'storage_preference': selection_options['storage_preference'],
+        'os_edition': selection_options['os_edition'],
         'custom_budget_weights': normalized_custom_budget_weights,
         'configuration_id': configuration.id,
         'total_price': total_price,
@@ -1455,16 +2221,49 @@ def build_configuration_response(
     }, None
 
 
+PART_TYPE_LABELS = {
+    'cpu':         'CPU',
+    'cpu_cooler':  'CPUクーラー',
+    'gpu':         'GPU',
+    'motherboard': 'マザーボード',
+    'memory':      'メモリー',
+    'storage':     'ストレージ',
+    'os':          'OS',
+    'psu':         '電源',
+    'case':        'ケース',
+}
+
+
 def build_scraper_status_summary():
     latest = ScraperStatus.objects.order_by('-updated_at').first()
     total_parts = PCPart.objects.count()
-    cached_categories = sorted(list(set(PCPart.objects.values_list('part_type', flat=True))))
+
+    # カテゴリ別件数・価格帯を一括集計
+    from django.db.models import Count as DbCount2, Min as DbMin, Max as DbMax
+    rows = (
+        PCPart.objects
+        .values('part_type')
+        .annotate(count=DbCount2('id'), min_price=DbMin('price'), max_price=DbMax('price'))
+        .order_by('part_type')
+    )
+    category_stats = [
+        {
+            'part_type': r['part_type'],
+            'label': PART_TYPE_LABELS.get(r['part_type'], r['part_type']),
+            'count': r['count'],
+            'min_price': r['min_price'],
+            'max_price': r['max_price'],
+        }
+        for r in rows
+    ]
+    cached_categories = sorted([r['part_type'] for r in category_stats])
 
     return {
         'cache_enabled': latest.cache_enabled if latest else True,
         'cache_ttl_seconds': latest.cache_ttl_seconds if latest else 3600,
         'last_update_time': latest.updated_at.isoformat() if latest else None,
         'cached_categories': cached_categories,
+        'category_stats': category_stats,
         'total_parts_in_db': total_parts,
         'retry_count': 3,
         'rate_limit_delay': 1.0,
@@ -1510,8 +2309,12 @@ class ConfigurationViewSet(viewsets.ModelViewSet):
     def _calculate_total_price(self, config):
         """合計金額を計算"""
         total = 0
-        for part_field in ['cpu', 'cpu_cooler', 'gpu', 'motherboard', 'memory', 'storage', 'psu', 'case']:
+        for part_field in ['cpu', 'cpu_cooler', 'gpu', 'motherboard', 'memory', 'storage', 'os', 'psu', 'case']:
             part = getattr(config, part_field)
+            if part:
+                total += part.price
+        for part_field in ['storage2', 'storage3']:
+            part = getattr(config, part_field, None)
             if part:
                 total += part.price
         config.total_price = total
@@ -1531,9 +2334,15 @@ class ConfigurationViewSet(viewsets.ModelViewSet):
             request.data.get('radiator_size'),
             request.data.get('cooling_profile'),
             request.data.get('case_size'),
+            request.data.get('case_fan_policy'),
             request.data.get('cpu_vendor'),
             request.data.get('build_priority'),
+            request.data.get('storage_preference'),
+            request.data.get('storage2_part_id'),
+            request.data.get('storage3_part_id'),
+            request.data.get('os_edition'),
             request.data.get('custom_budget_weights'),
+            request.data.get('min_storage_capacity_gb'),
         )
         if error_response:
             return error_response
@@ -1561,9 +2370,15 @@ class GenerateConfigAPIView(APIView):
             request.data.get('radiator_size'),
             request.data.get('cooling_profile'),
             request.data.get('case_size'),
+            request.data.get('case_fan_policy'),
             request.data.get('cpu_vendor'),
             request.data.get('build_priority'),
+            request.data.get('storage_preference'),
+            request.data.get('storage2_part_id'),
+            request.data.get('storage3_part_id'),
+            request.data.get('os_edition'),
             request.data.get('custom_budget_weights'),
+            request.data.get('min_storage_capacity_gb'),
         )
         if error_response:
             return error_response
@@ -1592,9 +2407,119 @@ PART_TYPE_LABELS = {
     'motherboard': 'マザーボード',
     'memory':      'メモリ',
     'storage':     'ストレージ',
+    'os':          'OS',
     'psu':         '電源ユニット',
     'case':        'PCケース',
 }
+
+STORAGE_INTERFACE_LABELS = {
+    'nvme': 'NVMe',
+    'sata': 'SATA',
+    'other': 'その他',
+}
+
+
+def _format_storage_capacity_label(capacity_gb):
+    if not capacity_gb:
+        return '容量不明'
+    if capacity_gb >= 1024:
+        value_tb = capacity_gb / 1024
+        if float(value_tb).is_integer():
+            return f'{int(value_tb)}TB'
+        return f'{value_tb:.1f}TB'
+    return f'{capacity_gb}GB'
+
+
+def _infer_storage_interface(part):
+    interface = str(_get_spec(part, 'interface', '') or '').strip().upper()
+    if interface == 'NVME':
+        return 'nvme'
+    if interface == 'SATA':
+        return 'sata'
+
+    text = f"{getattr(part, 'name', '')} {getattr(part, 'url', '')}".lower()
+    if 'nvme' in text:
+        return 'nvme'
+    if 'sata' in text:
+        return 'sata'
+    # WD NVMe models: SN700, SN850, SN750, SN580, SN500
+    if re.search(r'\bsn[5-9]\d{2}\b', text):
+        return 'nvme'
+    # WD SATA SSD models: SA500
+    if re.search(r'\bsa\d{3}\b', text):
+        return 'sata'
+    # Samsung NVMe models: 970 EVO/PRO, 980 PRO, 990 PRO
+    if re.search(r'\b(970|980|990)\s*(evo|pro)\b', text):
+        return 'nvme'
+    # M.2 in product name → NVMe
+    if 'm.2' in text:
+        return 'nvme'
+    return 'other'
+
+
+def _serialize_storage_part(part):
+    capacity_gb = _infer_storage_capacity_gb(part)
+    interface_key = _infer_storage_interface(part)
+    return {
+        'id': part.id,
+        'name': part.name,
+        'price': part.price,
+        'url': part.url,
+        'capacity_gb': capacity_gb,
+        'capacity_label': _format_storage_capacity_label(capacity_gb),
+        'interface': interface_key,
+        'interface_label': STORAGE_INTERFACE_LABELS.get(interface_key, 'その他'),
+        'form_factor': _get_spec(part, 'form_factor'),
+        'updated_at': part.updated_at,
+    }
+
+
+def _build_storage_inventory_summary():
+    storage_parts = list(PCPart.objects.filter(part_type='storage').order_by('price', 'name'))
+    serialized_items = [_serialize_storage_part(part) for part in storage_parts]
+
+    capacity_groups = defaultdict(list)
+    interface_groups = defaultdict(list)
+    latest_updated_at = None
+    for item in serialized_items:
+        capacity_groups[(item['capacity_gb'], item['capacity_label'])].append(item)
+        interface_groups[item['interface']].append(item)
+        updated_at = item['updated_at']
+        if updated_at and (latest_updated_at is None or updated_at > latest_updated_at):
+            latest_updated_at = updated_at
+
+    capacity_summary = []
+    for (capacity_gb, label), items in sorted(capacity_groups.items(), key=lambda entry: (entry[0][0], entry[0][1])):
+        prices = [item['price'] for item in items]
+        capacity_summary.append({
+            'capacity_gb': capacity_gb,
+            'label': label,
+            'count': len(items),
+            'min_price': min(prices) if prices else None,
+            'max_price': max(prices) if prices else None,
+            'avg_price': int(sum(prices) / len(prices)) if prices else None,
+            'items': items,
+        })
+
+    interface_summary = []
+    for interface_key in ('nvme', 'sata', 'other'):
+        items = interface_groups.get(interface_key, [])
+        prices = [item['price'] for item in items]
+        interface_summary.append({
+            'interface': interface_key,
+            'label': STORAGE_INTERFACE_LABELS[interface_key],
+            'count': len(items),
+            'min_price': min(prices) if prices else None,
+            'max_price': max(prices) if prices else None,
+            'avg_price': int(sum(prices) / len(prices)) if prices else None,
+        })
+
+    return {
+        'total_count': len(serialized_items),
+        'latest_updated_at': latest_updated_at,
+        'capacity_summary': capacity_summary,
+        'interface_summary': interface_summary,
+    }
 
 
 class PartPriceRangesAPIView(APIView):
@@ -1617,4 +2542,11 @@ class PartPriceRangesAPIView(APIView):
                 'count': agg['total'],
             }
         return Response(result)
+
+
+class StorageInventoryAPIView(APIView):
+    """ストレージDBの一覧と容量別・接続別サマリーを返す"""
+
+    def get(self, request):
+        return Response(_build_storage_inventory_summary())
 

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ConfigForm } from "./ConfigForm";
 import { ResultView } from "./ResultView";
 import {
@@ -81,6 +81,37 @@ function App() {
     fetchSavedConfigurations();
   }, []);
 
+  const getConfigContentSignature = (config: SavedConfigurationResponse) => {
+    const partIds = [
+      config.cpu_data?.id ?? 0,
+      config.cpu_cooler_data?.id ?? 0,
+      config.gpu_data?.id ?? 0,
+      config.motherboard_data?.id ?? 0,
+      config.memory_data?.id ?? 0,
+      config.storage_data?.id ?? 0,
+      config.storage2_data?.id ?? 0,
+      config.storage3_data?.id ?? 0,
+      config.os_data?.id ?? 0,
+      config.psu_data?.id ?? 0,
+      config.case_data?.id ?? 0,
+    ];
+    return `${config.usage}|${config.budget}|${partIds.join("-")}`;
+  };
+
+  const uniqueSavedConfigurations = useMemo(() => {
+    const bySignature = new Map<string, SavedConfigurationResponse>();
+    for (const config of savedConfigurations) {
+      const signature = getConfigContentSignature(config);
+      const current = bySignature.get(signature);
+      if (!current || new Date(config.created_at).getTime() > new Date(current.created_at).getTime()) {
+        bySignature.set(signature, config);
+      }
+    }
+    return Array.from(bySignature.values()).sort(
+      (left, right) => new Date(right.created_at).getTime() - new Date(left.created_at).getTime()
+    );
+  }, [savedConfigurations]);
+
   const handleGenerateConfig = async (
     budget: number,
     usage: string,
@@ -89,8 +120,14 @@ function App() {
       radiatorSize: "120" | "240" | "360";
       coolingProfile: "silent" | "performance";
       caseSize: "mini" | "mid" | "full";
+      caseFanPolicy: "auto" | "silent" | "airflow";
       cpuVendor: "any" | "intel" | "amd";
       buildPriority: "cost" | "spec";
+      storagePreference: "ssd" | "hdd";
+      mainStorageCapacity: "512" | "1024" | "2048" | "4096";
+      storage2PartId: number | null;
+      storage3PartId: number | null;
+      osEdition: "auto" | "home" | "pro";
       useCustomBudgetWeights: boolean;
       customBudgetWeights: CustomBudgetWeights;
     }
@@ -106,8 +143,14 @@ function App() {
         radiator_size: options.radiatorSize,
         cooling_profile: options.coolingProfile,
         case_size: options.caseSize,
+        case_fan_policy: options.caseFanPolicy,
         cpu_vendor: options.cpuVendor === "any" ? undefined : options.cpuVendor,
         build_priority: options.buildPriority,
+        storage_preference: options.storagePreference,
+        min_storage_capacity_gb: Number(options.mainStorageCapacity),
+        storage2_part_id: options.storage2PartId ?? undefined,
+        storage3_part_id: options.storage3PartId ?? undefined,
+        os_edition: options.osEdition,
         custom_budget_weights: options.useCustomBudgetWeights ? options.customBudgetWeights : undefined,
       });
       setResult(response);
@@ -139,13 +182,22 @@ function App() {
   const executeDeleteSavedConfig = async (config: SavedConfigurationResponse) => {
     setHistoryActionLoadingId(config.id);
     try {
-      await deleteSavedConfiguration(config.id);
-      if (selectedSavedConfig?.id === config.id) {
+      const signature = getConfigContentSignature(config);
+      const duplicateConfigs = savedConfigurations.filter((item) => getConfigContentSignature(item) === signature);
+      for (const item of duplicateConfigs) {
+        await deleteSavedConfiguration(item.id);
+      }
+
+      if (selectedSavedConfig && duplicateConfigs.some((item) => item.id === selectedSavedConfig.id)) {
         setSelectedSavedConfig(null);
       }
       setHistoryLoading(true);
       await fetchSavedConfigurations();
-      setHistoryToastMessage(`ID ${config.id} を削除しました`);
+      setHistoryToastMessage(
+        duplicateConfigs.length > 1
+          ? `同一内容 ${duplicateConfigs.length} 件を削除しました`
+          : `ID ${config.id} を削除しました`
+      );
     } catch (err) {
       setHistoryError(
         err instanceof Error ? err.message : "保存済み構成の削除に失敗しました"
@@ -170,7 +222,10 @@ function App() {
   };
 
   const handleBulkDeleteVisibleHistory = async () => {
-    const deleteCandidates = historyDeleteScope === "all" ? savedConfigurations : filteredHistory;
+    const deleteCandidates = historyDeleteScope === "all" ? savedConfigurations : savedConfigurations.filter((config) => {
+      const visibleSignatures = new Set(filteredHistory.map((item) => getConfigContentSignature(item)));
+      return visibleSignatures.has(getConfigContentSignature(config));
+    });
     if (deleteCandidates.length === 0) {
       return;
     }
@@ -205,7 +260,7 @@ function App() {
     }
   };
 
-  const filteredHistory = savedConfigurations.filter((config) => {
+  const filteredHistory = uniqueSavedConfigurations.filter((config) => {
     if (historyUsageFilter !== "all" && config.usage !== historyUsageFilter) {
       return false;
     }
@@ -221,6 +276,9 @@ function App() {
       config.motherboard_data?.name,
       config.memory_data?.name,
       config.storage_data?.name,
+      config.storage2_data?.name,
+      config.storage3_data?.name,
+      config.os_data?.name,
       config.psu_data?.name,
       config.case_data?.name,
     ]
@@ -253,7 +311,7 @@ function App() {
         className="fixed top-4 right-4 bg-slate-900 hover:bg-slate-800 text-white rounded px-4 py-2 text-sm font-medium transition-colors z-50"
         title={showHistory ? "保存済み構成を閉じる" : "保存済み構成を開く"}
       >
-        {showHistory ? "✕ 保存履歴" : `保存履歴 ${savedConfigurations.length}`}
+        {showHistory ? "✕ 保存履歴" : `保存履歴 ${uniqueSavedConfigurations.length}`}
       </button>
 
       {/* 開発者モードのみスクレイパーUIを表示 */}
@@ -270,17 +328,39 @@ function App() {
       {/* スクレイパー統計情報パネル */}
       {isDeveloperViewEnabled && scraperStatus && !statusLoading && showStatus && (
         <div className="fixed bottom-16 left-4 bg-slate-50 border border-slate-300 rounded-lg p-4 shadow-lg text-sm max-w-xs z-50">
-          <div className="font-semibold text-slate-700 mb-2">スクレイパー状態</div>
-          <div className="space-y-1 text-slate-600">
-            <div>キャッシュ: {scraperStatus.cache_enabled ? "有効" : "無効"}</div>
-            <div>DB パーツ数: {scraperStatus.total_parts_in_db}</div>
-            <div>キャッシュ率: {scraperStatus.cached_categories.length}/7</div>
-            {scraperStatus.last_update_time && (
-              <div className="text-xs text-slate-500">
-                最終更新: {new Date(scraperStatus.last_update_time).toLocaleString("ja-JP")}
-              </div>
-            )}
+          <div className="font-semibold text-slate-700 mb-2">
+            取得済みパーツ一覧
+            <span className="ml-2 text-xs font-normal text-slate-500">
+              合計 {scraperStatus.total_parts_in_db} 件
+            </span>
           </div>
+          <table className="w-full text-xs text-slate-600 border-collapse">
+            <thead>
+              <tr className="border-b border-slate-200 text-slate-500">
+                <th className="text-left py-1 pr-2 font-medium">カテゴリ</th>
+                <th className="text-right py-1 pr-2 font-medium">件数</th>
+                <th className="text-right py-1 font-medium">価格帯 (¥)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {scraperStatus.category_stats.map((stat) => (
+                <tr key={stat.part_type} className="border-b border-slate-100 last:border-0">
+                  <td className="py-1 pr-2">{stat.label}</td>
+                  <td className="text-right py-1 pr-2 tabular-nums">{stat.count}</td>
+                  <td className="text-right py-1 tabular-nums text-slate-500">
+                    {stat.min_price != null && stat.max_price != null
+                      ? `${stat.min_price.toLocaleString()}〜${stat.max_price.toLocaleString()}`
+                      : "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {scraperStatus.last_update_time && (
+            <div className="mt-2 text-xs text-slate-400">
+              最終更新: {new Date(scraperStatus.last_update_time).toLocaleString("ja-JP")}
+            </div>
+          )}
         </div>
       )}
 
@@ -289,7 +369,7 @@ function App() {
           <div className="flex items-center justify-between mb-4">
             <div>
               <div className="text-lg font-bold text-slate-900">保存済み構成</div>
-              <div className="text-xs text-slate-500">最新 50 件まで表示 ・ {filteredHistory.length} 件表示中</div>
+              <div className="text-xs text-slate-500">内容一致は1件に集約表示 ・ {filteredHistory.length} 件表示中</div>
             </div>
             <button
               onClick={() => {
@@ -345,7 +425,7 @@ function App() {
             <div className="text-sm text-slate-500">読み込み中...</div>
           ) : historyError ? (
             <div className="text-sm text-red-500">{historyError}</div>
-          ) : savedConfigurations.length === 0 ? (
+          ) : uniqueSavedConfigurations.length === 0 ? (
             <div className="text-sm text-slate-500">まだ保存済み構成はありません。</div>
           ) : filteredHistory.length === 0 ? (
             <div className="text-sm text-slate-500">条件に一致する保存済み構成はありません。</div>
@@ -370,6 +450,11 @@ function App() {
                   <div className="text-sm text-slate-600">
                     予算 ¥{config.budget.toLocaleString("ja-JP")}
                   </div>
+                  {config.os_data?.name && (
+                    <div className="mt-1 text-xs text-slate-500">
+                      OS: {config.os_data.name}
+                    </div>
+                  )}
                   <div className="flex gap-2 mt-3">
                     <button
                       onClick={() => handleSelectSavedConfig(config)}

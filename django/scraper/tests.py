@@ -153,6 +153,28 @@ class ScraperApiTests(APITestCase):
 		self.assertEqual(response.status_code, status.HTTP_200_OK)
 		self.assertLessEqual(response.data['total_price'], 90000)
 
+	def test_generate_config_includes_os_when_available(self):
+		PCPart.objects.create(
+			part_type='os',
+			name='Microsoft Windows 11 HOME 日本語パッケージ版',
+			price=16480,
+			specs={'edition': 'Home'},
+			url='https://example.com/windows-home',
+		)
+
+		response = self.client.post(
+			'/api/configurations/generate/',
+			{'budget': 120000, 'usage': 'gaming'},
+			format='json',
+		)
+
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+		os_parts = [p for p in response.data['parts'] if p['category'] == 'os']
+		self.assertEqual(len(os_parts), 1)
+		self.assertIn('Windows 11', os_parts[0]['name'])
+		configuration = Configuration.objects.get(id=response.data['configuration_id'])
+		self.assertIsNotNone(configuration.os)
+
 	def test_generate_config_resolves_socket_and_memory_compatibility(self):
 		PCPart.objects.create(
 			part_type='motherboard',
@@ -220,6 +242,101 @@ class ScraperApiTests(APITestCase):
 		psu_part = [p for p in response.data['parts'] if p['category'] == 'psu'][0]
 		self.assertEqual(response.status_code, status.HTTP_200_OK)
 		self.assertEqual(psu_part['name'], '750W PSU')
+
+	def test_generate_config_requires_1000w_psu_for_rtx5080_class_build(self):
+		self.cpu.delete()
+		self.gpu.delete()
+
+		PCPart.objects.create(
+			part_type='cpu',
+			name='Intel Core Ultra 7 265KF BOX',
+			price=45980,
+			specs={'socket': 'LGA1851', 'tdp_w': 125},
+			url='https://example.com/cpu-265kf',
+		)
+		PCPart.objects.create(
+			part_type='cpu_cooler',
+			name='ID-COOLING FX360-PRO 360mm AIO',
+			price=8990,
+			specs={'supported_sockets': ['LGA1851']},
+			url='https://example.com/cooler-360',
+		)
+		PCPart.objects.create(
+			part_type='gpu',
+			name='GeForce RTX 5080 16GB',
+			price=209800,
+			specs={'vram': '16GB'},
+			url='https://example.com/gpu-rtx5080',
+		)
+		PCPart.objects.create(
+			part_type='motherboard',
+			name='B860 ATX Board',
+			price=18480,
+			specs={'socket': 'LGA1851', 'memory_type': 'DDR5', 'form_factor': 'ATX'},
+			url='https://example.com/mb-b860-atx',
+		)
+		PCPart.objects.create(
+			part_type='memory',
+			name='DDR5 32GB Kit',
+			price=24800,
+			specs={'memory_type': 'DDR5', 'capacity_gb': 32},
+			url='https://example.com/mem-ddr5-32',
+		)
+		PCPart.objects.create(
+			part_type='memory',
+			name='DDR5 64GB Premium Kit',
+			price=49800,
+			specs={'memory_type': 'DDR5', 'capacity_gb': 64},
+			url='https://example.com/mem-ddr5-64',
+		)
+		PCPart.objects.create(
+			part_type='storage',
+			name='NVMe SSD 1TB RTX5080 Test',
+			price=11980,
+			specs={'interface': 'NVMe', 'capacity_gb': 1024},
+			url='https://example.com/storage-1tb-rtx5080',
+		)
+		PCPart.objects.create(
+			part_type='psu',
+			name='750W Gold PSU',
+			price=17980,
+			specs={'wattage': 750},
+			url='https://example.com/psu-750-gold',
+		)
+		PCPart.objects.create(
+			part_type='psu',
+			name='1000W Gold PSU',
+			price=26980,
+			specs={'wattage': 1000},
+			url='https://example.com/psu-1000-gold',
+		)
+		PCPart.objects.create(
+			part_type='case',
+			name='ATX Airflow Case',
+			price=18980,
+			specs={'supported_form_factors': ['ATX']},
+			url='https://example.com/case-atx-airflow',
+		)
+
+		response = self.client.post(
+			'/api/configurations/generate/',
+			{
+				'budget': 350000,
+				'usage': 'gaming',
+				'build_priority': 'cost',
+				'cooler_type': 'liquid',
+				'radiator_size': '360',
+				'cooling_profile': 'performance',
+				'case_size': 'mid',
+				'case_fan_policy': 'airflow',
+			},
+			format='json',
+		)
+
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+		parts = {p['category']: p for p in response.data['parts']}
+		self.assertIn('RTX 5080', parts['gpu']['name'])
+		self.assertEqual(parts['psu']['name'], '1000W Gold PSU')
 
 	def test_generate_config_ignores_unsuitable_cpu_accessory(self):
 		PCPart.objects.create(
@@ -362,6 +479,13 @@ class ScraperApiTests(APITestCase):
 			specs={},
 			url='https://example.com/cpu-amd',
 		)
+		PCPart.objects.create(
+			part_type='cpu',
+			name='AMD Ryzen 7 7800X3D',
+			price=52000,
+			specs={},
+			url='https://example.com/cpu-amd-x3d',
+		)
 
 		intel_response = self.client.post(
 			'/api/configurations/generate/',
@@ -380,11 +504,87 @@ class ScraperApiTests(APITestCase):
 		self.assertEqual(intel_response.status_code, status.HTTP_200_OK)
 		self.assertEqual(amd_response.status_code, status.HTTP_200_OK)
 		self.assertIn('intel', intel_cpu['name'].lower())
-		self.assertTrue(
-			('amd' in amd_cpu['name'].lower()) or ('ryzen' in amd_cpu['name'].lower())
-		)
+		self.assertIn('x3d', amd_cpu['name'].lower())
 		self.assertEqual(intel_response.data['cpu_vendor'], 'intel')
 		self.assertEqual(amd_response.data['cpu_vendor'], 'amd')
+
+	def test_generate_config_prefers_x3d_cpu_for_gaming_when_vendor_is_any(self):
+		self.cpu.delete()
+		self.gpu.delete()
+
+		PCPart.objects.create(
+			part_type='cpu',
+			name='Intel Core i7 14700F',
+			price=42000,
+			specs={'socket': 'LGA1700'},
+			url='https://example.com/cpu-intel-gaming-any',
+		)
+		PCPart.objects.create(
+			part_type='cpu',
+			name='AMD Ryzen 7 9700X',
+			price=49800,
+			specs={'socket': 'AM5'},
+			url='https://example.com/cpu-amd-9700x',
+		)
+		PCPart.objects.create(
+			part_type='cpu',
+			name='AMD Ryzen 7 9800X3D',
+			price=59800,
+			specs={'socket': 'AM5'},
+			url='https://example.com/cpu-amd-9800x3d',
+		)
+		PCPart.objects.create(
+			part_type='gpu',
+			name='GeForce RTX 4070 SUPER',
+			price=98000,
+			specs={'vram': '12GB'},
+			url='https://example.com/gpu-4070-super',
+		)
+		PCPart.objects.create(
+			part_type='motherboard',
+			name='AM5 Board Gaming Any',
+			price=18000,
+			specs={'socket': 'AM5', 'memory_type': 'DDR5', 'form_factor': 'ATX'},
+			url='https://example.com/mb-am5-gaming-any',
+		)
+		PCPart.objects.create(
+			part_type='memory',
+			name='DDR5 32GB Gaming Any',
+			price=12000,
+			specs={'memory_type': 'DDR5', 'capacity_gb': 32},
+			url='https://example.com/mem-gaming-any',
+		)
+		PCPart.objects.create(
+			part_type='storage',
+			name='NVMe 1TB Gaming Any',
+			price=10000,
+			specs={'interface': 'NVMe', 'capacity_gb': 1024},
+			url='https://example.com/storage-gaming-any',
+		)
+		PCPart.objects.create(
+			part_type='psu',
+			name='850W PSU Gaming Any',
+			price=13000,
+			specs={'wattage': 850},
+			url='https://example.com/psu-gaming-any',
+		)
+		PCPart.objects.create(
+			part_type='case',
+			name='ATX Case Gaming Any',
+			price=9000,
+			specs={'supported_form_factors': ['ATX']},
+			url='https://example.com/case-gaming-any',
+		)
+
+		response = self.client.post(
+			'/api/configurations/generate/',
+			{'budget': 260000, 'usage': 'gaming', 'build_priority': 'spec'},
+			format='json',
+		)
+
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+		selected_cpu = [p for p in response.data['parts'] if p['category'] == 'cpu'][0]
+		self.assertIn('9800x3d', selected_cpu['name'].lower())
 
 	def test_generate_config_respects_build_priority_cost_vs_spec(self):
 		PCPart.objects.create(
@@ -932,6 +1132,150 @@ class ScraperApiTests(APITestCase):
 		parts = {p['category']: p for p in response.data['parts']}
 		self.assertIn('1TB', parts['storage']['name'])
 
+	def test_generate_config_prefers_ssd_as_primary_storage_over_cheaper_hdd(self):
+		PCPart.objects.create(
+			part_type='cpu',
+			name='AMD Ryzen 5 7600X Primary SSD',
+			price=32000,
+			specs={'socket': 'AM5'},
+			url='https://example.com/cpu-primary-ssd',
+		)
+		PCPart.objects.create(
+			part_type='gpu',
+			name='NVIDIA GeForce RTX 4060 Primary SSD',
+			price=52000,
+			specs={'vram': '8GB'},
+			url='https://example.com/gpu-primary-ssd',
+		)
+		PCPart.objects.create(
+			part_type='motherboard',
+			name='B650 DDR5 Board Primary SSD',
+			price=15000,
+			specs={'socket': 'AM5', 'memory_type': 'DDR5', 'form_factor': 'MicroATX'},
+			url='https://example.com/mb-primary-ssd',
+		)
+		PCPart.objects.create(
+			part_type='memory',
+			name='DDR5 16GB Primary SSD',
+			price=9000,
+			specs={'memory_type': 'DDR5', 'capacity_gb': 16},
+			url='https://example.com/mem-primary-ssd',
+		)
+		PCPart.objects.create(
+			part_type='storage',
+			name='Large HDD 4TB',
+			price=9000,
+			specs={'capacity_gb': 4096, 'interface': 'SATA', 'form_factor': '3.5inch'},
+			url='https://example.com/hdd-primary-ssd',
+		)
+		PCPart.objects.create(
+			part_type='storage',
+			name='NVMe SSD 1TB Primary',
+			price=12000,
+			specs={'capacity_gb': 1024, 'interface': 'NVMe', 'form_factor': 'M.2'},
+			url='https://example.com/nvme-primary-ssd',
+		)
+		PCPart.objects.create(
+			part_type='psu',
+			name='750W PSU Primary SSD',
+			price=9000,
+			specs={'wattage': 750},
+			url='https://example.com/psu-primary-ssd',
+		)
+		PCPart.objects.create(
+			part_type='case',
+			name='ATX Case Primary SSD',
+			price=9000,
+			specs={'supported_form_factors': ['MicroATX', 'ATX']},
+			url='https://example.com/case-primary-ssd',
+		)
+
+		response = self.client.post(
+			'/api/configurations/generate/',
+			{
+				'budget': 170000,
+				'usage': 'standard',
+				'build_priority': 'cost',
+			},
+			format='json',
+		)
+
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+		parts = {p['category']: p for p in response.data['parts']}
+		self.assertIn('SSD', parts['storage']['name'])
+
+	def test_generate_config_storage_falls_back_to_hdd_when_only_high_capacity_option(self):
+		PCPart.objects.create(
+			part_type='cpu',
+			name='AMD Ryzen 5 7600X HDD Fallback',
+			price=32000,
+			specs={'socket': 'AM5'},
+			url='https://example.com/cpu-hdd-fallback',
+		)
+		PCPart.objects.create(
+			part_type='gpu',
+			name='NVIDIA GeForce RTX 4060 HDD Fallback',
+			price=52000,
+			specs={'vram': '8GB'},
+			url='https://example.com/gpu-hdd-fallback',
+		)
+		PCPart.objects.create(
+			part_type='motherboard',
+			name='B650 DDR5 Board HDD Fallback',
+			price=15000,
+			specs={'socket': 'AM5', 'memory_type': 'DDR5', 'form_factor': 'MicroATX'},
+			url='https://example.com/mb-hdd-fallback',
+		)
+		PCPart.objects.create(
+			part_type='memory',
+			name='DDR5 16GB HDD Fallback',
+			price=9000,
+			specs={'memory_type': 'DDR5', 'capacity_gb': 16},
+			url='https://example.com/mem-hdd-fallback',
+		)
+		PCPart.objects.create(
+			part_type='storage',
+			name='SATA SSD 512GB Small',
+			price=7000,
+			specs={'capacity_gb': 512, 'interface': 'SATA', 'form_factor': '2.5inch'},
+			url='https://example.com/sata-small-hdd-fallback',
+		)
+		PCPart.objects.create(
+			part_type='storage',
+			name='Archive HDD 2TB',
+			price=9000,
+			specs={'capacity_gb': 2048, 'interface': 'SATA', 'form_factor': '3.5inch'},
+			url='https://example.com/hdd-fallback-storage',
+		)
+		PCPart.objects.create(
+			part_type='psu',
+			name='750W PSU HDD Fallback',
+			price=9000,
+			specs={'wattage': 750},
+			url='https://example.com/psu-hdd-fallback',
+		)
+		PCPart.objects.create(
+			part_type='case',
+			name='ATX Case HDD Fallback',
+			price=9000,
+			specs={'supported_form_factors': ['MicroATX', 'ATX']},
+			url='https://example.com/case-hdd-fallback',
+		)
+
+		response = self.client.post(
+			'/api/configurations/generate/',
+			{
+				'budget': 170000,
+				'usage': 'gaming',
+				'build_priority': 'spec',
+			},
+			format='json',
+		)
+
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+		parts = {p['category']: p for p in response.data['parts']}
+		self.assertIn('HDD', parts['storage']['name'])
+
 	def test_generate_config_gaming_spec_rebalances_with_motherboard_swap(self):
 		PCPart.objects.create(
 			part_type='cpu',
@@ -1381,6 +1725,33 @@ class ScraperApiTests(APITestCase):
 		self.assertEqual(response.data['total_parts_in_db'], 2)
 		self.assertEqual(response.data['cached_categories'], ['cpu', 'gpu'])
 
+	def test_storage_inventory_endpoint_returns_capacity_and_interface_summaries(self):
+		PCPart.objects.create(
+			part_type='storage',
+			name='Fast NVMe 1TB',
+			price=12800,
+			specs={'capacity_gb': 1024, 'interface': 'NVMe', 'form_factor': 'M.2'},
+			url='https://example.com/storage-nvme',
+		)
+		PCPart.objects.create(
+			part_type='storage',
+			name='Large SATA 2TB',
+			price=15800,
+			specs={'capacity_gb': 2048, 'interface': 'SATA', 'form_factor': '2.5inch'},
+			url='https://example.com/storage-sata',
+		)
+
+		response = self.client.get('/api/storage-inventory/')
+
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+		self.assertEqual(response.data['total_count'], 2)
+		self.assertEqual(response.data['interface_summary'][0]['label'], 'NVMe')
+		self.assertEqual(response.data['interface_summary'][0]['count'], 1)
+		self.assertEqual(response.data['interface_summary'][1]['label'], 'SATA')
+		self.assertEqual(response.data['capacity_summary'][0]['label'], '1TB')
+		self.assertEqual(response.data['capacity_summary'][0]['items'][0]['name'], 'Fast NVMe 1TB')
+		self.assertEqual(response.data['capacity_summary'][1]['label'], '2TB')
+
 	def test_configurations_list_includes_saved_configuration(self):
 		generate_response = self.client.post(
 			'/api/configurations/generate/',
@@ -1634,6 +2005,28 @@ class DosparaScraperTests(APITestCase):
 		self.assertEqual(
 			_infer_part_type('DeepCool AK620 CPUクーラー', 'https://www.dospara.co.jp/SBR95/IC123456.html'),
 			'cpu_cooler',
+		)
+
+	def test_infer_part_type_detects_os(self):
+		self.assertEqual(
+			_infer_part_type('Microsoft Windows 11 Pro 日本語パッケージ版', 'https://www.dospara.co.jp/SBR170/IC479479.html'),
+			'os',
+		)
+
+	def test_infer_part_type_detects_hdd_storage(self):
+		self.assertEqual(
+			_infer_part_type('Seagate BarraCuda ST8000DM004 (8TB)', 'https://www.dospara.co.jp/SBR1964/IC451338.html'),
+			'storage',
+		)
+		self.assertEqual(
+			_infer_part_type('TOSHIBA MQ04ABD200 (2TB)', 'https://www.dospara.co.jp/SBR405/IC453537.html'),
+			'storage',
+		)
+
+	def test_infer_part_type_detects_storage_from_br13_hint(self):
+		self.assertEqual(
+			_infer_part_type('Unknown Drive Model', 'https://www.dospara.co.jp/BR13/IC451338.html'),
+			'storage',
 		)
 
 	def test_infer_part_type_excludes_geforce_gt_series_gpu(self):

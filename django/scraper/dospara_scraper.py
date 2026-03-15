@@ -71,6 +71,7 @@ PRODUCT_LINK_PATTERN = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 IC_CODE_PATTERN = re.compile(r"IC\d{6,}")
+PRODUCT_PAGE_HREF_PATTERN = re.compile(r"/(?:SBR\d+/)?(IC\d{6,})\.html", re.IGNORECASE)
 
 # ドスパラの一覧に混在する汎用カテゴリ名を、アプリの part_type へ寄せる。
 CATEGORY_RULES = {
@@ -90,6 +91,27 @@ CATEGORY_RULES = {
             "noctua",
             "deepcool",
             "corsair icue link h",
+            "arctic p12",
+            "arctic p14",
+            "arctic f12",
+            "arctic f14",
+            "arctic s8",
+            "arctic s12",
+            "kaze flex",
+            "wonder snail",
+            "uni fan",
+            "icue link lx",
+            "icue link qx",
+            "momentum 12",
+            "momentum 14",
+            "fractal aspect",
+            "be quiet! pure wings",
+            "be quiet! pro wings",
+            "phanteks d30",
+            "phanteks t30",
+            "nzxt f120",
+            "nzxt f140",
+            "nzxt f360",
         ],
         "exclude": ["グリス", "thermal paste", "マザーボード", "motherboard", "pcケース"],
     },
@@ -128,8 +150,31 @@ CATEGORY_RULES = {
         "exclude": ["ssd", "hdd", "nvme"],
     },
     "storage": {
-        "include": ["ssd", "hdd", "nvme", "m.2", "storage", "ストレージ", "wd black", "wds"],
+        "include": [
+            "ssd",
+            "hdd",
+            "nvme",
+            "m.2",
+            "storage",
+            "ストレージ",
+            "wd black",
+            "wd blue",
+            "wd red",
+            "wds",
+            "barracuda",
+            "ironwolf",
+            "mq04",
+            "dt02",
+            "n300",
+            "mg10",
+            "mg11",
+            "hat3300",
+        ],
         "exclude": ["microatx", "mini-itx", "am5", "am4", "lga1700", "lga1851", "b650", "b760", "z790", "h610"],
+    },
+    "os": {
+        "include": ["windows 11", "windows 10", "microsoft windows", "operating system", "os 日本語"],
+        "exclude": ["office", "word", "excel", "outlook", "antivirus", "security"],
     },
     "psu": {
         "include": ["power", "psu", "電源", "80 plus", "80plus", "pcie5", "atx3.0", "atx 3.0"],
@@ -142,11 +187,12 @@ CATEGORY_RULES = {
 }
 
 URL_CATEGORY_HINTS = {
-    "cpu_cooler": ["/sbr95/", "/br95", "/cpu-cooler"],
+    "cpu_cooler": ["/sbr95/", "/br95", "/cpu-cooler", "/sbr738/", "/sbr739/", "/br116"],
     "cpu": ["/sbr2/", "/sbr8/", "/TC2/"],
     "gpu": ["/sbr4/", "/sbr1853/", "/TC8/"],
     "memory": ["/sbr5/", "/sbr1716/"],
-    "storage": ["/sbr7/", "/sbr12/", "/sbr13/", "/sbr6/"],
+    "storage": ["/br13", "/sbr7/", "/sbr12/", "/sbr13/", "/sbr6/", "/hdd-35sata"],
+    "os": ["/br161", "/sbr170/"],
     "psu": ["/sbr83/"],
     "case": ["/sbr79/", "/sbr447/", "/sbr143/", "/sbr1959/", "/sbr448/"],
     "motherboard": ["/sbr1739/", "/sbr1798/", "/sbr1297/", "/sbr21/"],
@@ -161,6 +207,7 @@ PART_CATEGORY_URLS: Dict[str, List[str]] = {
     "motherboard": ["https://www.dospara.co.jp/BR21", "https://www.dospara.co.jp/mb-intel", "https://www.dospara.co.jp/mb-amd"],
     "memory":      ["https://www.dospara.co.jp/BR12", "https://www.dospara.co.jp/mem-note"],
     "storage":     ["https://www.dospara.co.jp/BR115", "https://www.dospara.co.jp/BR13", "https://www.dospara.co.jp/m2ssd"],
+    "os":          ["https://www.dospara.co.jp/BR161"],
     "psu":         ["https://www.dospara.co.jp/BR83", "https://www.dospara.co.jp/SBR755"],
     "case":        ["https://www.dospara.co.jp/BR72", "https://www.dospara.co.jp/case-tower", "https://www.dospara.co.jp/case-compact"],
 }
@@ -336,6 +383,37 @@ def _extract_ic_codes(html: str, max_codes: int) -> List[str]:
     return codes
 
 
+def _extract_product_link_ic_codes(html: str, max_codes: int) -> List[str]:
+    codes: List[str] = []
+    seen = set()
+    soup = BeautifulSoup(html or "", "html.parser")
+
+    for anchor in soup.find_all("a", href=True):
+        href = anchor.get("href") or ""
+        match = PRODUCT_PAGE_HREF_PATTERN.search(href)
+        if not match:
+            continue
+
+        code = match.group(1).upper()
+        if code in seen:
+            continue
+
+        text = " ".join(anchor.stripped_strings)
+        if not text or len(text) < 3:
+            continue
+
+        lowered = text.lower()
+        if any(token in lowered for token in ["レビュー", "比較", "カート", "詳細を見る"]):
+            continue
+
+        seen.add(code)
+        codes.append(code)
+        if len(codes) >= max_codes:
+            break
+
+    return codes
+
+
 def _extract_category_id(category_url: str) -> Optional[str]:
     match = re.search(r"dospara\.co\.jp/([A-Za-z]+\d+)", category_url or "", re.IGNORECASE)
     return match.group(1) if match else None
@@ -352,7 +430,14 @@ def _collect_ic_codes_from_category_pages(
     max_pages: int = 30,
 ) -> List[str]:
     # 初回HTML + UpdateGridのページングからICコードを収集する。
-    codes = _extract_ic_codes(html, max_codes=max_codes)
+    codes = _extract_product_link_ic_codes(html, max_codes=max_codes)
+    if len(codes) < max_codes:
+        for code in _extract_ic_codes(html, max_codes=max_codes):
+            if code in codes:
+                continue
+            codes.append(code)
+            if len(codes) >= max_codes:
+                break
     if len(codes) >= max_codes:
         return codes
 
@@ -562,11 +647,150 @@ def _extract_specs_from_simplespec(part_type: str, simplespec: str) -> Dict:
             if "max_radiator_mm" not in specs:
                 specs["max_radiator_mm"] = max(sorted_sizes)
 
+        # ケース: 付属ファン数
+        if re.search(r"(?:付属|標準(?:搭載)?)[^\n]{0,12}ファン[^\n]{0,8}(?:なし|非搭載|無し)", text, re.IGNORECASE):
+            specs["included_fan_count"] = 0
+        else:
+            included_matches = re.findall(
+                r"(?:付属|標準(?:搭載)?)[^\n]{0,16}?(?:ファン|cooling fan)[^\d\n]{0,8}(\d+)\s*(?:基|個|pcs?|x)?",
+                text,
+                re.IGNORECASE,
+            )
+            if included_matches:
+                specs["included_fan_count"] = max(int(v) for v in included_matches)
+
+        # ケース: 搭載可能ファン総数
+        supported_count = 0
+        for size, count in re.findall(r"(120|140|200)\s*mm\s*[x×]\s*(\d+)", text, re.IGNORECASE):
+            try:
+                supported_count += int(count)
+            except (TypeError, ValueError):
+                continue
+        if supported_count > 0:
+            specs["supported_fan_count"] = supported_count
+        else:
+            m = re.search(r"(?:最大|搭載可能)[^\n]{0,16}(\d+)\s*(?:基|個)", text, re.IGNORECASE)
+            if m:
+                specs["supported_fan_count"] = int(m.group(1))
+
+        # ケース: 前面/上面/背面の搭載可能ファン数
+        position_slots = _extract_case_position_fan_slots(text)
+        if position_slots:
+            specs.update(position_slots)
+            if "supported_fan_count" not in specs:
+                specs["supported_fan_count"] = sum(position_slots.values())
+
     return specs
 
 
-def _build_parts_from_products_map(products_map: Dict[str, Dict], base_url: str, max_items: int) -> List[Dict]:
+def _extract_case_position_fan_slots(text: str) -> Dict:
+    """ケース説明文から前面/上面/背面の搭載可能ファン数を抽出する。"""
+    extracted: Dict = {}
+    if not text:
+        return extracted
+
+    source = text.lower()
+    position_aliases = {
+        "front": ["前面", "フロント", "front"],
+        "top": ["上面", "トップ", "top"],
+        "rear": ["背面", "リア", "rear"],
+    }
+
+    for position, aliases in position_aliases.items():
+        values = []
+        for alias in aliases:
+            escaped = re.escape(alias)
+            values.extend(
+                re.findall(
+                    rf"{escaped}[^\n]{{0,24}}?(?:120|140|200)\s*mm\s*[x×]\s*(\d+)",
+                    source,
+                    re.IGNORECASE,
+                )
+            )
+            values.extend(
+                re.findall(
+                    rf"{escaped}[^\n]{{0,24}}?(?:最大|搭載可能)?[^\d\n]{{0,8}}(\d+)\s*(?:基|個)",
+                    source,
+                    re.IGNORECASE,
+                )
+            )
+        if values:
+            extracted[f"{position}_fan_slots"] = max(int(v) for v in values)
+
+    return extracted
+
+
+def _extract_case_fan_specs_from_product_page(
+    product_url: str,
+    headers: Dict[str, str],
+    timeout: int,
+    session: Optional[requests.Session],
+) -> Dict:
+    """ケース商品ページ本文から、付属ファン数と搭載可能ファン数を抽出する。"""
+    extracted: Dict = {}
+    if not product_url:
+        return extracted
+
+    client = session or requests.Session()
+    response = client.get(product_url, headers=headers, timeout=timeout)
+    response.raise_for_status()
+    soup = BeautifulSoup(response.content, "html.parser")
+    text = " ".join(soup.stripped_strings)
+    lower_text = text.lower()
+
+    if re.search(r"(?:付属|標準(?:搭載)?|搭載)[^\n]{0,16}ファン[^\n]{0,8}(?:なし|非搭載|無し)", lower_text, re.IGNORECASE):
+        extracted["included_fan_count"] = 0
+    else:
+        included_candidates = []
+        included_candidates.extend(
+            re.findall(
+                r"(?:標準(?:搭載)?|付属|搭載)[^\n]{0,20}(\d+)\s*(?:基|個)",
+                lower_text,
+                re.IGNORECASE,
+            )
+        )
+        included_candidates.extend(
+            re.findall(
+                r"(?:標準(?:搭載)?|付属|搭載)[^\n]{0,20}(?:120|140|200)\s*mm\s*[x×]\s*(\d+)",
+                lower_text,
+                re.IGNORECASE,
+            )
+        )
+        if included_candidates:
+            extracted["included_fan_count"] = max(int(v) for v in included_candidates)
+
+    supported_count = 0
+    for _, count in re.findall(r"(120|140|200)\s*mm\s*[x×]\s*(\d+)", lower_text, re.IGNORECASE):
+        try:
+            supported_count += int(count)
+        except (TypeError, ValueError):
+            continue
+    if supported_count > 0:
+        extracted["supported_fan_count"] = supported_count
+    else:
+        m = re.search(r"(?:搭載可能|最大)[^\n]{0,18}(\d+)\s*(?:基|個)", lower_text, re.IGNORECASE)
+        if m:
+            extracted["supported_fan_count"] = int(m.group(1))
+
+    position_slots = _extract_case_position_fan_slots(lower_text)
+    if position_slots:
+        extracted.update(position_slots)
+        if "supported_fan_count" not in extracted:
+            extracted["supported_fan_count"] = sum(position_slots.values())
+
+    return extracted
+
+
+def _build_parts_from_products_map(
+    products_map: Dict[str, Dict],
+    base_url: str,
+    max_items: int,
+    headers: Optional[Dict[str, str]] = None,
+    timeout: int = 20,
+    session: Optional[requests.Session] = None,
+) -> List[Dict]:
     collected: List[Dict] = []
+    page_fan_specs_cache: Dict[str, Dict] = {}
     for code, info in products_map.items():
         name = (info.get("pname") or "").strip()
         price = _normalize_price(str(info.get("amttax") or ""))
@@ -582,6 +806,24 @@ def _build_parts_from_products_map(products_map: Dict[str, Dict], base_url: str,
 
         simplespec = (info.get("simplespec") or "").strip()
         extracted = _extract_specs_from_simplespec(part_type, simplespec)
+
+        if part_type == "case" and (
+            "included_fan_count" not in extracted and "supported_fan_count" not in extracted
+        ):
+            if full_url in page_fan_specs_cache:
+                extracted.update(page_fan_specs_cache[full_url])
+            elif headers:
+                try:
+                    page_specs = _extract_case_fan_specs_from_product_page(
+                        product_url=full_url,
+                        headers=headers,
+                        timeout=timeout,
+                        session=session,
+                    )
+                except Exception:
+                    page_specs = {}
+                page_fan_specs_cache[full_url] = page_specs
+                extracted.update(page_specs)
 
         part_specs = {
             "source": "dospara",
@@ -815,7 +1057,14 @@ def scrape_dospara_category_parts(
                     batch_size=config["batch_size"],
                     session=client,
                 )
-                parts = _build_parts_from_products_map(products_map, url, max_items_per_category)
+                parts = _build_parts_from_products_map(
+                    products_map,
+                    url,
+                    max_items_per_category,
+                    headers=config["headers"],
+                    timeout=timeout,
+                    session=client,
+                )
                 for part in parts:
                     if part["part_type"] != part_type:
                         continue
@@ -852,7 +1101,14 @@ def scrape_dospara_parts(timeout: int = 20, max_items: int = 200, session: Optio
         batch_size=config.get("batch_size", SCRAPER_DEFAULT_CONFIG["batch_size"]),
         session=client,
     )
-    api_parts = _build_parts_from_products_map(products_map, config["url"], effective_max_items)
+    api_parts = _build_parts_from_products_map(
+        products_map,
+        config["url"],
+        effective_max_items,
+        headers=config["headers"],
+        timeout=effective_timeout,
+        session=client,
+    )
     if api_parts:
         return api_parts
 

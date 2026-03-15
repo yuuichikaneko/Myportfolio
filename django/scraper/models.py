@@ -10,6 +10,7 @@ class PCPart(models.Model):
         ('motherboard', 'Motherboard'),
         ('memory', 'Memory'),
         ('storage', 'Storage'),
+        ('os', 'OS'),
         ('psu', 'Power Supply'),
         ('case', 'Case'),
     ]
@@ -46,6 +47,9 @@ class Configuration(models.Model):
     motherboard = models.ForeignKey(PCPart, on_delete=models.SET_NULL, null=True, related_name='cfg_mobo')
     memory = models.ForeignKey(PCPart, on_delete=models.SET_NULL, null=True, related_name='cfg_memory')
     storage = models.ForeignKey(PCPart, on_delete=models.SET_NULL, null=True, related_name='cfg_storage')
+    storage2 = models.ForeignKey(PCPart, on_delete=models.SET_NULL, null=True, blank=True, related_name='cfg_storage2')
+    storage3 = models.ForeignKey(PCPart, on_delete=models.SET_NULL, null=True, blank=True, related_name='cfg_storage3')
+    os = models.ForeignKey(PCPart, on_delete=models.SET_NULL, null=True, related_name='cfg_os')
     psu = models.ForeignKey(PCPart, on_delete=models.SET_NULL, null=True, related_name='cfg_psu')
     case = models.ForeignKey(PCPart, on_delete=models.SET_NULL, null=True, related_name='cfg_case')
     total_price = models.IntegerField(default=0)

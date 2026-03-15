@@ -26,6 +26,7 @@ from scraper.views import (
     ScraperStatusCompatAPIView,
     MarketPriceRangeAPIView,
     PartPriceRangesAPIView,
+    StorageInventoryAPIView,
 )
 
 # Create router and register viewsets
@@ -41,6 +42,7 @@ urlpatterns = [
     path('api/scraper-status/summary/', ScraperStatusCompatAPIView.as_view()),
     path('api/market-price-range/', MarketPriceRangeAPIView.as_view()),
     path('api/part-price-ranges/', PartPriceRangesAPIView.as_view()),
+    path('api/storage-inventory/', StorageInventoryAPIView.as_view()),
     path('api/', include(router.urls)),
     path('api-auth/', include('rest_framework.urls')),
     path('generate-config', GenerateConfigAPIView.as_view()),

@@ -7,6 +7,9 @@ const apiMocks = vi.hoisted(() => ({
   getSavedConfigurationsMock: vi.fn(),
   getScraperStatusMock: vi.fn(),
   deleteSavedConfigurationMock: vi.fn(),
+  getMarketPriceRangeMock: vi.fn(),
+  getPartPriceRangesMock: vi.fn(),
+  getStorageInventoryMock: vi.fn(),
 }));
 
 vi.mock("./api", () => ({
@@ -14,6 +17,9 @@ vi.mock("./api", () => ({
   getSavedConfigurations: apiMocks.getSavedConfigurationsMock,
   getScraperStatus: apiMocks.getScraperStatusMock,
   deleteSavedConfiguration: apiMocks.deleteSavedConfigurationMock,
+  getMarketPriceRange: apiMocks.getMarketPriceRangeMock,
+  getPartPriceRanges: apiMocks.getPartPriceRangesMock,
+  getStorageInventory: apiMocks.getStorageInventoryMock,
 }));
 
 const savedConfigurationsFixture = [
@@ -28,6 +34,7 @@ const savedConfigurationsFixture = [
     motherboard_data: null,
     memory_data: null,
     storage_data: null,
+    os_data: null,
     psu_data: null,
     case_data: null,
     created_at: "2026-03-14T10:00:00Z",
@@ -43,6 +50,7 @@ const savedConfigurationsFixture = [
     motherboard_data: null,
     memory_data: null,
     storage_data: null,
+    os_data: null,
     psu_data: null,
     case_data: null,
     created_at: "2026-03-14T11:00:00Z",
@@ -61,6 +69,48 @@ describe("App history panel", () => {
       total_parts_in_db: 2,
       retry_count: 3,
       rate_limit_delay: 1,
+    });
+    apiMocks.getMarketPriceRangeMock.mockResolvedValue({
+      min: 100000,
+      max: 400000,
+      default: 250000,
+      currency: "JPY",
+      sources: {},
+    });
+    apiMocks.getPartPriceRangesMock.mockResolvedValue({
+      gpu: { label: "GPU", min: 30000, max: 80000, avg: 55000, count: 2 },
+    });
+    apiMocks.getStorageInventoryMock.mockResolvedValue({
+      total_count: 2,
+      latest_updated_at: "2026-03-15T10:00:00Z",
+      interface_summary: [
+        { interface: "nvme", label: "NVMe", count: 1, min_price: 10000, max_price: 10000, avg_price: 10000 },
+        { interface: "sata", label: "SATA", count: 1, min_price: 8000, max_price: 8000, avg_price: 8000 },
+      ],
+      capacity_summary: [
+        {
+          capacity_gb: 1024,
+          label: "1TB",
+          count: 1,
+          min_price: 10000,
+          max_price: 10000,
+          avg_price: 10000,
+          items: [
+            {
+              id: 1,
+              name: "Sample NVMe 1TB",
+              price: 10000,
+              url: "https://example.com/storage-1",
+              capacity_gb: 1024,
+              capacity_label: "1TB",
+              interface: "nvme",
+              interface_label: "NVMe",
+              form_factor: "M.2",
+              updated_at: "2026-03-15T10:00:00Z",
+            },
+          ],
+        },
+      ],
     });
     apiMocks.deleteSavedConfigurationMock.mockResolvedValue(undefined);
   });
