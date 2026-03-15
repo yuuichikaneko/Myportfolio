@@ -17,6 +17,7 @@ Including another URLconf
 from django.contrib import admin
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
+from config.views import home
 from scraper.views import (
     PCPartViewSet,
     ConfigurationViewSet,
@@ -34,6 +35,7 @@ router.register(r'configurations', ConfigurationViewSet, basename='configuration
 router.register(r'scraper-status', ScraperStatusViewSet, basename='scraper-status')
 
 urlpatterns = [
+    path('', home, name='home'),
     path('admin/', admin.site.urls),
     path('api/generate-config/', GenerateConfigAPIView.as_view()),
     path('api/scraper-status/summary/', ScraperStatusCompatAPIView.as_view()),
