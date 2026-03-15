@@ -2,6 +2,26 @@
 @tailwind components;
 @tailwind utilities;
 
+html {
+  background: #f1f5f9;
+}
+
 body {
-  font-family: system-ui, -apple-system, sans-serif;
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  color: #0f172a;
+  font-family: "Segoe UI Variable", "Yu Gothic UI", "Hiragino Sans", "Noto Sans JP", sans-serif;
+  background: #f1f5f9;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
 }

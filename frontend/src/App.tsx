@@ -242,6 +242,9 @@ function App() {
   });
 
   const activeResult = result ?? selectedSavedConfig;
+  const isDeveloperViewEnabled =
+    import.meta.env.DEV ||
+    (typeof window !== "undefined" && window.localStorage.getItem("myportfolio:developer-mode") === "1");
 
   return (
     <>
@@ -253,17 +256,19 @@ function App() {
         {showHistory ? "✕ 保存履歴" : `保存履歴 ${savedConfigurations.length}`}
       </button>
 
-      {/* スクレイパー統計情報パネル表示切り替えボタン */}
-      <button
-        onClick={() => setShowStatus(!showStatus)}
-        className="fixed bottom-4 left-4 bg-blue-500 hover:bg-blue-600 text-white rounded px-3 py-2 text-sm font-medium transition-colors z-50"
-        title={showStatus ? "スクレイパー情報を非表示" : "スクレイパー情報を表示"}
-      >
-        {showStatus ? "▼ スクレイパー" : "▶ スクレイパー"}
-      </button>
+      {/* 開発者モードのみスクレイパーUIを表示 */}
+      {isDeveloperViewEnabled && (
+        <button
+          onClick={() => setShowStatus(!showStatus)}
+          className="fixed bottom-4 left-4 bg-blue-500 hover:bg-blue-600 text-white rounded px-3 py-2 text-sm font-medium transition-colors z-50"
+          title={showStatus ? "スクレイパー情報を非表示" : "スクレイパー情報を表示"}
+        >
+          {showStatus ? "▼ スクレイパー" : "▶ スクレイパー"}
+        </button>
+      )}
 
       {/* スクレイパー統計情報パネル */}
-      {scraperStatus && !statusLoading && showStatus && (
+      {isDeveloperViewEnabled && scraperStatus && !statusLoading && showStatus && (
         <div className="fixed bottom-16 left-4 bg-slate-50 border border-slate-300 rounded-lg p-4 shadow-lg text-sm max-w-xs z-50">
           <div className="font-semibold text-slate-700 mb-2">スクレイパー状態</div>
           <div className="space-y-1 text-slate-600">
