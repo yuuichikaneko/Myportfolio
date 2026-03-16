@@ -304,6 +304,13 @@ function App() {
     import.meta.env.DEV ||
     (typeof window !== "undefined" && window.localStorage.getItem("myportfolio:developer-mode") === "1");
 
+  useEffect(() => {
+    // 画面切り替え時（フォーム→結果 / 結果→フォーム）は常に先頭へ移動する。
+    window.requestAnimationFrame(() => {
+      window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+    });
+  }, [activeResult]);
+
   return (
     <>
       <button
