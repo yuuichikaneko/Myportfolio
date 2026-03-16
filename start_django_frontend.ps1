@@ -29,8 +29,13 @@ Write-Output "Django + Frontend Startup"
 Write-Output "============================================================"
 Write-Output ""
 
+$python = Join-Path $PSScriptRoot ".venv/Scripts/python.exe"
+if (-not (Test-Path $python)) {
+	$python = "py"
+}
+
 Write-Output "[1] Starting Django on port 8001..."
-Start-Process powershell -ArgumentList '-NoExit', '-Command', "cd '$PSScriptRoot/django'; py manage.py runserver 8001"
+Start-Process powershell -ArgumentList '-NoExit', '-Command', "cd '$PSScriptRoot/django'; & '$python' manage.py runserver 8001"
 
 Start-Sleep -Seconds 2
 

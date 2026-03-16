@@ -16,7 +16,12 @@ echo ============================================================
 echo.
 
 echo [1] Starting Django on port 8001...
-start "Django - Port 8001" cmd /k "cd django && py manage.py runserver 8001"
+set PYTHON_EXE=%~dp0\.venv\Scripts\python.exe
+if exist "%PYTHON_EXE%" (
+	start "Django - Port 8001" cmd /k "cd django && %PYTHON_EXE% manage.py runserver 8001"
+) else (
+	start "Django - Port 8001" cmd /k "cd django && py manage.py runserver 8001"
+)
 
 timeout /t 2 /nobreak >nul
 
