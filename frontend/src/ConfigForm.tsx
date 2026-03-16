@@ -271,7 +271,7 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
   const [storageInventoryLoading, setStorageInventoryLoading] = useState(true);
   const [storageQuery, setStorageQuery] = useState("");
   const [storageInterfaceFilter, setStorageInterfaceFilter] = useState<"all" | "nvme" | "sata" | "other">("all");
-  const [showMarketSummary, setShowMarketSummary] = useState(false);
+  const [showMarketSummary, setShowMarketSummary] = useState(true);
   const [showStorageDbDetails, setShowStorageDbDetails] = useState(false);
   const [popupMessage, setPopupMessage] = useState<string | null>(null);
   const [activeUsageTooltip, setActiveUsageTooltip] = useState<string | null>(null);
@@ -387,10 +387,10 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
       const bases = [184980, 274980, 589980, 1309980].map((value) => Math.min(budgetMax, value));
       const [entry, middle, high, flagship] = bases.map((price) => price - sub);
       return [
-        { label: "ロー", value: entry },
+        { label: "ローエンド", value: entry },
         { label: "ミドル", value: middle },
-        { label: "ハイ", value: high },
-        { label: "ハイエンド", value: flagship },
+        { label: "ハイエンド", value: high },
+        { label: "プレミアム", value: flagship },
       ];
     }
 
@@ -398,19 +398,19 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
       const bases = [89980, 109980, 172980, 249980];
       const [entry, middle, high, flagship] = bases.map((price) => price - sub);
       return [
-        { label: "ロー", value: entry },
+        { label: "ローエンド", value: entry },
         { label: "ミドル", value: middle },
-        { label: "ハイ", value: high },
-        { label: "ハイエンド", value: flagship },
+        { label: "ハイエンド", value: high },
+        { label: "プレミアム", value: flagship },
       ];
     }
 
     if (usage === "business") {
       return [
-        { label: "ロー", value: Math.max(0, min - sub) },
+        { label: "ローエンド", value: Math.max(0, min - sub) },
         { label: "ミドル", value: Math.max(0, Math.round((min * 1.3) / 10000) * 10000 - sub) },
-        { label: "ハイ", value: Math.max(0, Math.round((min * 1.7) / 10000) * 10000 - sub) },
-        { label: "ハイエンド", value: Math.max(0, Math.round((min * 2.2) / 10000) * 10000 - sub) },
+        { label: "ハイエンド", value: Math.max(0, Math.round((min * 1.7) / 10000) * 10000 - sub) },
+        { label: "プレミアム", value: Math.max(0, Math.round((min * 2.2) / 10000) * 10000 - sub) },
       ];
     }
 
@@ -419,10 +419,10 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
     const flagship = 979980 - sub;
 
     return [
-      { label: "ロー", value: entry },
+      { label: "ローエンド", value: entry },
       { label: "ミドル", value: middle },
-      { label: "ハイ", value: high },
-      { label: "ハイエンド", value: flagship },
+      { label: "ハイエンド", value: high },
+      { label: "プレミアム", value: flagship },
     ];
   }, [budgetMax, marketRange.min, usage]);
 
@@ -442,6 +442,15 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
     }
     return Math.max(0, Math.min(100, ((budget - budgetMin) / range) * 100));
   }, [budget, budgetMax, budgetMin]);
+
+  const budgetDigits = useMemo(() => {
+    const safeBudget = Math.max(0, Number.isFinite(budget) ? budget : 0);
+    return String(Math.trunc(safeBudget)).length;
+  }, [budget]);
+
+  const yenSymbolLeft = useMemo(() => {
+    return `calc(50% - ${Math.max(2, budgetDigits) * 0.4}ch - 1.35em)`;
+  }, [budgetDigits]);
 
   const canSubmit = !isLoading && (!useCustomBudgetWeights || customBudgetWeightTotal > 0);
 
@@ -614,55 +623,70 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
   return (
     <div className="min-h-screen bg-slate-100 px-4 py-6">
       <div className="mx-auto max-w-4xl space-y-4">
-        <header className="rounded-xl border border-slate-300 bg-white p-5">
-          {showMarketSummary && (
-            <>
-              <p className="mt-1 text-sm text-slate-600">予算と用途を選ぶと、条件に沿った構成を提案します。</p>
-              <div className="mt-4 grid gap-2 text-sm">
-                {usagePriceHint && (
-                  <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
-                    用途別の推奨予算帯: <span className="font-semibold text-slate-900">{`¥${usagePriceHint.min.toLocaleString("ja-JP")} - ¥${usagePriceHint.max.toLocaleString("ja-JP")}`}</span>
-                  </div>
-                )}
-                {marketRangeError && <p className="text-xs text-amber-700">{marketRangeError}</p>}
-              </div>
-            </>
-          )}
-          <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-slate-200">
-            <div className="h-full bg-blue-600" style={{ width: `${budgetProgress}%` }} />
-          </div>
-        </header>
-
         <form onSubmit={handleSubmit} className="space-y-4 rounded-xl border border-slate-300 bg-white p-5">
           <section className="space-y-3">
-            <h2 className="text-base font-semibold text-slate-900">予算</h2>
-            <label className="inline-flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-xs text-slate-700">
+            <div className="flex items-center justify-between gap-3">
+              <h2 className="text-base font-semibold text-slate-900">予算</h2>
+              <label className="inline-flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-xs text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={showMarketSummary}
+                  onChange={(e) => setShowMarketSummary(e.target.checked)}
+                />
+                相場目安の表示
+              </label>
+            </div>
+            {showMarketSummary && (
+              <>
+                <p className="text-sm text-slate-600">予算と用途を選ぶと、条件に沿った構成を提案します。</p>
+                <div className="grid gap-2 text-sm">
+                  {usagePriceHint && (
+                    <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                      用途別の推奨予算帯: <span className="font-semibold text-slate-900">{`¥${usagePriceHint.min.toLocaleString("ja-JP")} - ¥${usagePriceHint.max.toLocaleString("ja-JP")}`}</span>
+                    </div>
+                  )}
+                  {marketRangeError && <p className="text-xs text-amber-700">{marketRangeError}</p>}
+                </div>
+              </>
+            )}
+            <div>
               <input
-                type="checkbox"
-                checked={showMarketSummary}
-                onChange={(e) => setShowMarketSummary(e.target.checked)}
+                type="range"
+                aria-label="予算スライダー"
+                min={budgetMin}
+                max={budgetMax}
+                step={1000}
+                value={Math.min(budgetMax, Math.max(budgetMin, budget))}
+                onChange={(event) => setBudget(Number(event.target.value))}
+                className="h-2 w-full cursor-pointer appearance-none rounded-full bg-slate-200 accent-blue-600"
+                style={{ backgroundSize: `${budgetProgress}% 100%` }}
               />
-              相場目安の表示
-            </label>
-            <input
-              type="number"
-              value={budget}
-              onFocus={() => setPopupMessage(`入力範囲: ¥${budgetMin.toLocaleString("ja-JP")} - ¥${budgetMax.toLocaleString("ja-JP")}`)}
-              onChange={(e) => {
-                setBudget(Number(e.target.value));
-                setPopupMessage(`入力範囲: ¥${budgetMin.toLocaleString("ja-JP")} - ¥${budgetMax.toLocaleString("ja-JP")}`);
-              }}
-              min={50000}
-              max={1500000}
-              step={1}
-              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-center text-lg font-semibold text-slate-900 outline-none focus:border-blue-600"
-            />
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-              {presets.map((preset) => (
-                <button key={preset.value} type="button" onClick={() => setBudget(preset.value)} className={segmentButtonClass(budget === preset.value)}>
-                  {preset.label}
-                </button>
-              ))}
+              <div className="mt-1 flex items-center justify-between text-xs text-slate-500">
+                <span>{`¥${budgetMin.toLocaleString("ja-JP")}`}</span>
+                <span className="font-semibold text-slate-700">{`現在: ¥${Math.min(budgetMax, Math.max(budgetMin, budget)).toLocaleString("ja-JP")}`}</span>
+                <span>{`¥${budgetMax.toLocaleString("ja-JP")}`}</span>
+              </div>
+            </div>
+            <div className="relative">
+              <span
+                className="pointer-events-none absolute top-1/2 -translate-y-1/2 text-lg font-semibold text-slate-500"
+                style={{ left: yenSymbolLeft }}
+              >
+                ￥
+              </span>
+              <input
+                type="number"
+                value={budget}
+                onFocus={() => setPopupMessage(`入力範囲: ¥${budgetMin.toLocaleString("ja-JP")} - ¥${budgetMax.toLocaleString("ja-JP")}`)}
+                onChange={(e) => {
+                  setBudget(Number(e.target.value));
+                  setPopupMessage(`入力範囲: ¥${budgetMin.toLocaleString("ja-JP")} - ¥${budgetMax.toLocaleString("ja-JP")}`);
+                }}
+                min={50000}
+                max={1500000}
+                step={1}
+                className="w-full rounded-lg border border-slate-300 py-2 pl-6 pr-3 text-center text-lg font-semibold text-slate-900 outline-none focus:border-blue-600"
+              />
             </div>
           </section>
 
@@ -698,6 +722,20 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
                 </label>
               ))}
             </div>
+            {usage === "gaming" && (
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                {presets.map((preset) => (
+                  <button
+                    key={preset.value}
+                    type="button"
+                    onClick={() => setBudget(preset.value)}
+                    className={segmentButtonClass(budget === preset.value)}
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+              </div>
+            )}
           </section>
 
           <section className="space-y-3 border-t border-slate-200 pt-4">
@@ -714,6 +752,7 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
                 </div>
               </div>
               <div>
+                <p className="mb-2 text-sm font-medium text-slate-800">ビルド優先度</p>
                 <div className="grid grid-cols-2 gap-2">
                   {BUILD_PRIORITY_OPTIONS.map((option) => (
                     <button
