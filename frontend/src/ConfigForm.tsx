@@ -619,10 +619,6 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
             <>
               <p className="mt-1 text-sm text-slate-600">予算と用途を選ぶと、条件に沿った構成を提案します。</p>
               <div className="mt-4 grid gap-2 text-sm">
-                <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-                  相場目安: <span className="font-semibold text-slate-900">{`¥${marketRange.min.toLocaleString("ja-JP")} - ¥${marketRange.max.toLocaleString("ja-JP")}`}</span>
-                  {marketRangeLoading && <span className="ml-2 text-xs text-slate-500">更新中...</span>}
-                </div>
                 {usagePriceHint && (
                   <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
                     用途別の推奨予算帯: <span className="font-semibold text-slate-900">{`¥${usagePriceHint.min.toLocaleString("ja-JP")} - ¥${usagePriceHint.max.toLocaleString("ja-JP")}`}</span>

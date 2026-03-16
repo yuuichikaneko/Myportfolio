@@ -70,6 +70,9 @@ verify_*.py
 # Temporary
 *.tmp
 *.temp
+.venv_broken_*/
+django/tmp_*.py
+django/*_sweep_result.json
 archive/
 start_servers.bat
 start_servers.py
