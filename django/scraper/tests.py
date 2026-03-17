@@ -12,6 +12,7 @@ from .dospara_scraper import (
 	_extract_specs_from_simplespec,
 )
 from .tasks import run_scraper_task
+from .views import _enforce_memory_speed_floor, _infer_memory_speed_mhz, _infer_storage_capacity_gb, _prefer_higher_gaming_cost_x3d_cpu, _rebalance_gaming_cost_cpu_to_storage
 
 
 class ScraperApiTests(APITestCase):
@@ -387,6 +388,13 @@ class ScraperApiTests(APITestCase):
 		)
 		PCPart.objects.create(
 			part_type='cpu_cooler',
+			name='DeepCool AK400 空冷クーラー',
+			price=7980,
+			specs={},
+			url='https://example.com/cooler-air-deepcool',
+		)
+		PCPart.objects.create(
+			part_type='cpu_cooler',
 			name='Corsair iCUE H150i ELITE LCD 水冷',
 			price=16800,
 			specs={},
@@ -409,8 +417,35 @@ class ScraperApiTests(APITestCase):
 
 		self.assertEqual(air_response.status_code, status.HTTP_200_OK)
 		self.assertEqual(liquid_response.status_code, status.HTTP_200_OK)
+		self.assertNotIn('Noctua', air_cooler['name'])
 		self.assertIn('空冷', air_cooler['name'])
 		self.assertIn('水冷', liquid_cooler['name'])
+
+	def test_generate_config_excludes_noctua_cpu_cooler(self):
+		PCPart.objects.create(
+			part_type='cpu_cooler',
+			name='noctua NH-D15 G2 chromax.black (NH-D15-G2-CH-BK)',
+			price=25980,
+			specs={},
+			url='https://example.com/noctua-nh-d15-g2',
+		)
+		PCPart.objects.create(
+			part_type='cpu_cooler',
+			name='DeepCool AK400 Air Cooler',
+			price=5980,
+			specs={},
+			url='https://example.com/deepcool-ak400',
+		)
+
+		response = self.client.post(
+			'/api/configurations/generate/',
+			{'budget': 180000, 'usage': 'gaming', 'cooler_type': 'air'},
+			format='json',
+		)
+
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+		cooler_part = [p for p in response.data['parts'] if p['category'] == 'cpu_cooler'][0]
+		self.assertEqual(cooler_part['name'], 'DeepCool AK400 Air Cooler')
 
 	def test_generate_config_respects_radiator_profile_and_case_size(self):
 		PCPart.objects.create(
@@ -1276,6 +1311,273 @@ class ScraperApiTests(APITestCase):
 		parts = {p['category']: p for p in response.data['parts']}
 		self.assertIn('HDD', parts['storage']['name'])
 
+	def test_rebalance_gaming_cost_moves_premium_cpu_budget_into_primary_storage(self):
+		premium_cpu = PCPart.objects.create(
+			part_type='cpu',
+			name='AMD Ryzen 9 9950X3D BOX',
+			price=110000,
+			specs={'socket': 'AM5'},
+			url='https://example.com/cpu-9950x3d',
+		)
+		value_cpu = PCPart.objects.create(
+			part_type='cpu',
+			name='AMD Ryzen 7 9850X3D BOX',
+			price=85000,
+			specs={'socket': 'AM5'},
+			url='https://example.com/cpu-9850x3d',
+		)
+		PCPart.objects.create(
+			part_type='cpu',
+			name='AMD Ryzen 7 9800X3D BOX',
+			price=70000,
+			specs={'socket': 'AM5'},
+			url='https://example.com/cpu-9800x3d',
+		)
+		motherboard = PCPart.objects.create(
+			part_type='motherboard',
+			name='B650 Gaming Board',
+			price=18000,
+			specs={'socket': 'AM5', 'memory_type': 'DDR5', 'form_factor': 'ATX'},
+			url='https://example.com/mb-am5-cost-storage',
+		)
+		memory = PCPart.objects.create(
+			part_type='memory',
+			name='DDR5 32GB Gaming Kit',
+			price=12000,
+			specs={'memory_type': 'DDR5', 'capacity_gb': 32},
+			url='https://example.com/mem-32gb-cost-storage',
+		)
+		storage_512 = PCPart.objects.create(
+			part_type='storage',
+			name='Gaming NVMe SSD 512GB',
+			price=12000,
+			specs={'capacity_gb': 512, 'interface': 'NVMe', 'media_type': 'ssd'},
+			url='https://example.com/ssd-512-cost-storage',
+		)
+		storage_2tb = PCPart.objects.create(
+			part_type='storage',
+			name='Gaming NVMe SSD 2TB',
+			price=28000,
+			specs={'capacity_gb': 2000, 'interface': 'NVMe', 'media_type': 'ssd'},
+			url='https://example.com/ssd-2tb-cost-storage',
+		)
+		gpu = PCPart.objects.create(
+			part_type='gpu',
+			name='GeForce RTX 4070 Ti SUPER 16GB',
+			price=70000,
+			specs={'vram': '16GB'},
+			url='https://example.com/gpu-4070ti-cost-storage',
+		)
+		cooler = PCPart.objects.create(
+			part_type='cpu_cooler',
+			name='Air Cooler 240 Dual Tower',
+			price=10000,
+			specs={},
+			url='https://example.com/cooler-cost-storage',
+		)
+		psu = PCPart.objects.create(
+			part_type='psu',
+			name='850W Gold PSU',
+			price=10000,
+			specs={'wattage': 850},
+			url='https://example.com/psu-cost-storage',
+		)
+		case = PCPart.objects.create(
+			part_type='case',
+			name='ATX Mid Tower Case',
+			price=8000,
+			specs={'supported_form_factors': ['ATX']},
+			url='https://example.com/case-cost-storage',
+		)
+		os_part = PCPart.objects.create(
+			part_type='os',
+			name='Windows 11 Home',
+			price=16000,
+			specs={'edition': 'Home'},
+			url='https://example.com/os-cost-storage',
+		)
+
+		selected_parts = {
+			'cpu': premium_cpu,
+			'cpu_cooler': cooler,
+			'gpu': gpu,
+			'motherboard': motherboard,
+			'memory': memory,
+			'storage': storage_512,
+			'os': os_part,
+			'psu': psu,
+			'case': case,
+		}
+
+		rebalanced = _rebalance_gaming_cost_cpu_to_storage(
+			selected_parts,
+			budget=275000,
+			usage='gaming',
+			options={
+				'usage': 'gaming',
+				'build_priority': 'cost',
+				'storage_preference': 'ssd',
+				'min_storage_capacity_gb': 2000,
+			},
+		)
+
+		self.assertEqual(rebalanced['cpu'].id, value_cpu.id)
+		self.assertEqual(rebalanced['storage'].id, storage_2tb.id)
+		self.assertGreaterEqual(_infer_storage_capacity_gb(rebalanced['storage']), 2000)
+
+	def test_gaming_cost_prefers_9850x3d_when_budget_allows_via_memory_rightsize(self):
+		current_cpu = PCPart.objects.create(
+			part_type='cpu',
+			name='AMD Ryzen 7 9800X3D BOX',
+			price=64799,
+			specs={'socket': 'AM5'},
+			url='https://example.com/cpu-9800x3d-upgrade',
+		)
+		better_cpu = PCPart.objects.create(
+			part_type='cpu',
+			name='AMD Ryzen 7 9850X3D BOX',
+			price=90780,
+			specs={'socket': 'AM5'},
+			url='https://example.com/cpu-9850x3d-upgrade',
+		)
+		PCPart.objects.create(
+			part_type='cpu',
+			name='AMD Ryzen 9 9950X3D BOX',
+			price=114470,
+			specs={'socket': 'AM5'},
+			url='https://example.com/cpu-9950x3d-upgrade',
+		)
+		motherboard = PCPart.objects.create(
+			part_type='motherboard',
+			name='B650 Gaming Board Upgrade',
+			price=18000,
+			specs={'socket': 'AM5', 'memory_type': 'DDR5', 'form_factor': 'ATX'},
+			url='https://example.com/mb-upgrade',
+		)
+		expensive_memory = PCPart.objects.create(
+			part_type='memory',
+			name='Corsair DDR5 PC5-51200 16GB 2枚組 Premium Kit',
+			price=91080,
+			specs={'memory_type': 'DDR5', 'capacity_gb': 32, 'speed_mhz': 6400},
+			url='https://example.com/mem-premium',
+		)
+		cheaper_memory = PCPart.objects.create(
+			part_type='memory',
+			name='Crucial DDR5 PC5-44800 16GB 2枚組 Value Kit',
+			price=64000,
+			specs={'memory_type': 'DDR5', 'capacity_gb': 32, 'speed_mhz': 5600},
+			url='https://example.com/mem-value',
+		)
+		storage = PCPart.objects.create(
+			part_type='storage',
+			name='ADATA 2TB NVMe SSD',
+			price=34800,
+			specs={'capacity_gb': 2000, 'interface': 'NVMe', 'media_type': 'ssd'},
+			url='https://example.com/storage-2tb',
+		)
+		gpu = PCPart.objects.create(
+			part_type='gpu',
+			name='GeForce RTX 5080 16GB',
+			price=309800,
+			specs={'vram': '16GB'},
+			url='https://example.com/gpu-5080',
+		)
+		cooler = PCPart.objects.create(
+			part_type='cpu_cooler',
+			name='Air Cooler Upgrade',
+			price=3218,
+			specs={},
+			url='https://example.com/cooler-upgrade',
+		)
+		psu = PCPart.objects.create(
+			part_type='psu',
+			name='1000W Gold PSU Upgrade',
+			price=16580,
+			specs={'wattage': 1000},
+			url='https://example.com/psu-upgrade',
+		)
+		case = PCPart.objects.create(
+			part_type='case',
+			name='ATX Mid Tower Upgrade',
+			price=3177,
+			specs={'supported_form_factors': ['ATX']},
+			url='https://example.com/case-upgrade',
+		)
+		os_part = PCPart.objects.create(
+			part_type='os',
+			name='Windows 11 Home Upgrade',
+			price=16480,
+			specs={'edition': 'Home'},
+			url='https://example.com/os-upgrade',
+		)
+
+		selected_parts = {
+			'cpu': current_cpu,
+			'cpu_cooler': cooler,
+			'gpu': gpu,
+			'motherboard': motherboard,
+			'memory': expensive_memory,
+			'storage': storage,
+			'os': os_part,
+			'psu': psu,
+			'case': case,
+		}
+
+		upgraded = _prefer_higher_gaming_cost_x3d_cpu(
+			selected_parts,
+			budget=574980,
+			usage='gaming',
+			options={
+				'usage': 'gaming',
+				'build_priority': 'cost',
+				'storage_preference': 'ssd',
+				'min_storage_capacity_gb': 2000,
+				'cpu_socket': 'AM5',
+				'motherboard_memory_type': 'DDR5',
+			},
+		)
+
+		self.assertEqual(upgraded['cpu'].id, better_cpu.id)
+		self.assertEqual(upgraded['memory'].id, cheaper_memory.id)
+		self.assertGreaterEqual(_infer_memory_speed_mhz(upgraded['memory']), 5600)
+
+	def test_enforce_memory_speed_floor_upgrades_9850x3d_build_to_ddr5_5600(self):
+		cpu = PCPart.objects.create(
+			part_type='cpu',
+			name='AMD Ryzen 7 9850X3D BOX',
+			price=90780,
+			specs={'socket': 'AM5'},
+			url='https://example.com/cpu-9850x3d-floor',
+		)
+		slow_memory = PCPart.objects.create(
+			part_type='memory',
+			name='Value DDR5 PC5-38400 16GB 2枚組',
+			price=58800,
+			specs={'memory_type': 'DDR5', 'capacity_gb': 32, 'speed_mhz': 4800},
+			url='https://example.com/mem-ddr5-4800-floor',
+		)
+		fast_memory = PCPart.objects.create(
+			part_type='memory',
+			name='Value DDR5 PC5-44800 16GB 2枚組',
+			price=60380,
+			specs={'memory_type': 'DDR5', 'capacity_gb': 32, 'speed_mhz': 5600},
+			url='https://example.com/mem-ddr5-5600-floor',
+		)
+		selected_parts = {
+			'cpu': cpu,
+			'memory': slow_memory,
+		}
+
+		adjusted = _enforce_memory_speed_floor(
+			selected_parts,
+			budget=160000,
+			usage='gaming',
+			options={'usage': 'gaming', 'build_priority': 'cost', 'min_memory_speed_mhz': 5600, 'motherboard_memory_type': 'DDR5'},
+		)
+
+		self.assertEqual(adjusted['memory'].id, fast_memory.id)
+		self.assertGreaterEqual(_infer_memory_speed_mhz(adjusted['memory']), 5600)
+
 	def test_generate_config_gaming_spec_rebalances_with_motherboard_swap(self):
 		PCPart.objects.create(
 			part_type='cpu',
@@ -1365,6 +1667,172 @@ class ScraperApiTests(APITestCase):
 		self.assertEqual(response.status_code, status.HTTP_200_OK)
 		parts = {p['category']: p for p in response.data['parts']}
 		self.assertGreaterEqual(parts['gpu']['price'], parts['memory']['price'])
+
+	def test_generate_config_gaming_spec_rightsizes_motherboard_for_better_gpu(self):
+		PCPart.objects.create(
+			part_type='cpu',
+			name='AMD Ryzen 9 9900X3D BOX',
+			price=91800,
+			specs={'socket': 'AM5'},
+			url='https://example.com/cpu-9900x3d-rightsize-mb',
+		)
+		PCPart.objects.create(
+			part_type='gpu',
+			name='Palit GeForce RTX 5070 Ti 16GB',
+			price=167800,
+			specs={'vram': '16GB'},
+			url='https://example.com/gpu-5070ti-base',
+		)
+		PCPart.objects.create(
+			part_type='gpu',
+			name='Palit GeForce RTX 5070 Ti OC 16GB',
+			price=209800,
+			specs={'vram': '16GB'},
+			url='https://example.com/gpu-5070ti-oc',
+		)
+		PCPart.objects.create(
+			part_type='motherboard',
+			name='MSI MEG X870E ACE MAX (X870E AM5 ATX)',
+			price=139800,
+			specs={'socket': 'AM5', 'memory_type': 'DDR5', 'chipset': 'X870E', 'form_factor': 'ATX'},
+			url='https://example.com/mb-x870e-flagship',
+		)
+		PCPart.objects.create(
+			part_type='motherboard',
+			name='MSI PRO X870-P WIFI (X870 AM5 ATX)',
+			price=49800,
+			specs={'socket': 'AM5', 'memory_type': 'DDR5', 'chipset': 'X870', 'form_factor': 'ATX'},
+			url='https://example.com/mb-x870-mainstream',
+		)
+		PCPart.objects.create(
+			part_type='memory',
+			name='Corsair DDR5 PC5-51200 16GB 2枚組',
+			price=91080,
+			specs={'memory_type': 'DDR5', 'capacity_gb': 32, 'speed_mhz': 6400},
+			url='https://example.com/mem-ddr5-rightsize-mb',
+		)
+		PCPart.objects.create(
+			part_type='storage',
+			name='KIOXIA NVMe 1TB',
+			price=22880,
+			specs={'media_type': 'ssd', 'interface': 'NVMe', 'capacity_gb': 1000},
+			url='https://example.com/storage-1tb-rightsize-mb',
+		)
+		PCPart.objects.create(
+			part_type='psu',
+			name='Antec 850W Gold PSU',
+			price=10980,
+			specs={'wattage': 850},
+			url='https://example.com/psu-850-rightsize-mb',
+		)
+		PCPart.objects.create(
+			part_type='case',
+			name='ATX Mid Tower Case',
+			price=3177,
+			specs={'supported_form_factors': ['ATX']},
+			url='https://example.com/case-rightsize-mb',
+		)
+		PCPart.objects.create(
+			part_type='cpu_cooler',
+			name='AINEX Air Cooler',
+			price=3218,
+			specs={},
+			url='https://example.com/cooler-rightsize-mb',
+		)
+
+		response = self.client.post(
+			'/api/configurations/generate/',
+			{
+				'budget': 574980,
+				'usage': 'gaming',
+				'build_priority': 'spec',
+				'cooler_type': 'air',
+				'radiator_size': '240',
+				'cooling_profile': 'performance',
+				'case_size': 'mid',
+			},
+			format='json',
+		)
+
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+		parts = {p['category']: p for p in response.data['parts']}
+		self.assertIn('X870 AM5', parts['motherboard']['name'])
+		self.assertNotIn('X870E', parts['motherboard']['name'])
+		self.assertEqual(parts['gpu']['name'], 'Palit GeForce RTX 5070 Ti OC 16GB')
+
+	def test_generate_config_gaming_spec_upgrades_to_liquid_cooler_when_surplus(self):
+		PCPart.objects.create(
+			part_type='cpu_cooler',
+			name='AINEX Air Cooler Budget',
+			price=3218,
+			specs={},
+			url='https://example.com/air-cooler-budget',
+		)
+		PCPart.objects.create(
+			part_type='cpu_cooler',
+			name='Corsair iCUE H150i ELITE LCD 360mm 水冷',
+			price=24800,
+			specs={'radiator_mm': 360},
+			url='https://example.com/liquid-cooler-360',
+		)
+
+		response = self.client.post(
+			'/api/configurations/generate/',
+			{
+				'budget': 574980,
+				'usage': 'gaming',
+				'build_priority': 'spec',
+				'cooler_type': 'air',
+				'radiator_size': '240',
+				'cooling_profile': 'performance',
+				'case_size': 'mid',
+			},
+			format='json',
+		)
+
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+		parts = {p['category']: p for p in response.data['parts']}
+		self.assertIn('水冷', parts['cpu_cooler']['name'])
+
+	def test_generate_config_gaming_spec_upgrades_case_for_cooling_when_surplus(self):
+		PCPart.objects.create(
+			part_type='case',
+			name='Budget ATX Case',
+			price=3177,
+			specs={'supported_form_factors': ['ATX'], 'included_fan_count': 1, 'supported_fan_count': 3},
+			url='https://example.com/case-budget-airflow',
+		)
+		PCPart.objects.create(
+			part_type='case',
+			name='High Airflow Mesh ATX Case',
+			price=12980,
+			specs={
+				'supported_form_factors': ['ATX'],
+				'included_fan_count': 4,
+				'supported_fan_count': 8,
+				'max_radiator_mm': 360,
+			},
+			url='https://example.com/case-high-airflow-mesh',
+		)
+
+		response = self.client.post(
+			'/api/configurations/generate/',
+			{
+				'budget': 574980,
+				'usage': 'gaming',
+				'build_priority': 'spec',
+				'cooler_type': 'air',
+				'radiator_size': '240',
+				'cooling_profile': 'performance',
+				'case_size': 'mid',
+				'case_fan_policy': 'auto',
+			},
+			format='json',
+		)
+
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+		parts = {p['category']: p for p in response.data['parts']}
+		self.assertIn('High Airflow Mesh', parts['case']['name'])
 
 	def test_generate_config_gaming_spec_prefers_rtx_or_rx_gpu(self):
 		PCPart.objects.create(
