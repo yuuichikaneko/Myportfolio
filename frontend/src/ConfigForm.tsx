@@ -722,20 +722,18 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
                 </label>
               ))}
             </div>
-            {usage === "gaming" && (
-              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                {presets.map((preset) => (
-                  <button
-                    key={preset.value}
-                    type="button"
-                    onClick={() => setBudget(preset.value)}
-                    className={segmentButtonClass(budget === preset.value)}
-                  >
-                    {preset.label}
-                  </button>
-                ))}
-              </div>
-            )}
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+              {presets.map((preset) => (
+                <button
+                  key={preset.value}
+                  type="button"
+                  onClick={() => setBudget(preset.value)}
+                  className={segmentButtonClass(budget === preset.value)}
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </div>
           </section>
 
           <section className="space-y-3 border-t border-slate-200 pt-4">
