@@ -414,9 +414,11 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
       ];
     }
 
-    const bases = [349980, 574980, 679980];
-    const [entry, middle, high] = bases.map((price) => price - sub);
-    const flagship = 979980 - sub;
+    const creatorBases =
+      buildPriority === "cost"
+        ? [199980, 299980, 449980, 699980]
+        : [349980, 574980, 679980, 979980];
+    const [entry, middle, high, flagship] = creatorBases.map((price) => price - sub);
 
     return [
       { label: "ローエンド", value: entry },
@@ -424,7 +426,7 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
       { label: "ハイエンド", value: high },
       { label: "プレミアム", value: flagship },
     ];
-  }, [budgetMax, marketRange.min, usage]);
+  }, [budgetMax, buildPriority, marketRange.min, usage]);
 
   const usagePriceHint = useMemo(() => {
     if (presets.length === 0) {
@@ -623,7 +625,7 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
   return (
     <div className="min-h-screen bg-slate-100 px-4 py-6">
       <div className="mx-auto max-w-4xl space-y-4">
-        <form onSubmit={handleSubmit} className="space-y-4 rounded-xl border border-slate-300 bg-white p-5">
+        <form id="config-form" onSubmit={handleSubmit} className="space-y-4 rounded-xl border border-slate-300 bg-white p-5 pb-28">
           <section className="space-y-3">
             <div className="flex items-center justify-between gap-3">
               <h2 className="text-base font-semibold text-slate-900">予算</h2>
@@ -1062,8 +1064,17 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
             )}
           </section>
 
+          <p className="text-center text-xs text-slate-500">
+            全パーツの互換性を確認しながら、条件に沿った構成を提案します。
+          </p>
+        </form>
+      </div>
+
+      <div className="fixed inset-x-0 bottom-0 z-40 border-t border-slate-200 bg-white/95 backdrop-blur">
+        <div className="mx-auto w-full max-w-5xl p-3 md:p-4">
           <button
             type="submit"
+            form="config-form"
             disabled={!canSubmit}
             className={`w-full rounded-lg px-4 py-3 text-base font-semibold transition ${
               canSubmit
@@ -1073,11 +1084,7 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
           >
             {isLoading ? "構成を生成中..." : "PC構成を提案してもらう"}
           </button>
-
-          <p className="text-center text-xs text-slate-500">
-            全パーツの互換性を確認しながら、条件に沿った構成を提案します。
-          </p>
-        </form>
+        </div>
       </div>
 
       {popupMessage && (
