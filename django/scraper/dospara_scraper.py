@@ -590,6 +590,58 @@ def _extract_specs_from_simplespec(part_type: str, simplespec: str) -> Dict:
         if m:
             specs["chipset"] = m.group(1).upper()
 
+        # M.2 スロット数
+        m2_values = []
+        for pattern in (
+            r"M\.2[^\n]{0,24}?(?:x|×)\s*(\d+)",
+            r"M\.2[^\n]{0,24}?(\d+)\s*(?:基|本|スロット)",
+            r"M\.2\s*Socket\s*\d+[^\n]{0,16}?(?:x|×)\s*(\d+)",
+        ):
+            m2_values.extend(re.findall(pattern, text, re.IGNORECASE))
+        if m2_values:
+            specs["m2_slots"] = max(int(v) for v in m2_values)
+
+        # PCIe スロット数
+        pcie_x16_values = re.findall(r"PCI(?:e|\s*Express)[^\n]{0,20}?x16[^\n]{0,10}?(?:x|×|：|:)\s*(\d+)", text, re.IGNORECASE)
+        if pcie_x16_values:
+            specs["pcie_x16_slots"] = max(int(v) for v in pcie_x16_values)
+
+        pcie_total = 0
+        for lane in ("16", "8", "4", "1"):
+            lane_values = re.findall(
+                rf"PCI(?:e|\s*Express)[^\n]{{0,24}}?x{lane}[^\n]{{0,10}}?(?:x|×|：|:)\s*(\d+)",
+                text,
+                re.IGNORECASE,
+            )
+            for value in lane_values:
+                try:
+                    pcie_total += int(value)
+                except (TypeError, ValueError):
+                    continue
+        if pcie_total > 0:
+            specs["pcie_slots"] = pcie_total
+
+        # USB ポート数（Type-C を別カウント）
+        usb_total = 0
+        for value in re.findall(r"USB[^\n]{0,32}?(?:x|×|：|:)\s*(\d+)", text, re.IGNORECASE):
+            try:
+                usb_total += int(value)
+            except (TypeError, ValueError):
+                continue
+        if usb_total > 0:
+            specs["usb_total"] = min(usb_total, 40)
+
+        type_c_total = 0
+        for value in re.findall(r"(?:Type\s*[- ]?C|USB\s*[- ]?C)[^\n]{0,18}?(?:x|×|：|:)\s*(\d+)", text, re.IGNORECASE):
+            try:
+                type_c_total += int(value)
+            except (TypeError, ValueError):
+                continue
+        if type_c_total > 0:
+            specs["type_c_ports"] = min(type_c_total, 10)
+
+        _apply_motherboard_expandability_fallback(specs, text)
+
     # ストレージ: 容量・インターフェース・フォームファクタ
     if part_type == "storage":
         m = re.search(r"容量[：:]\s*(\d+(?:\.\d+)?)\s*(TB|GB)", text, re.IGNORECASE)
@@ -680,6 +732,51 @@ def _extract_specs_from_simplespec(part_type: str, simplespec: str) -> Dict:
             if "supported_fan_count" not in specs:
                 specs["supported_fan_count"] = sum(position_slots.values())
 
+    return specs
+
+
+def _apply_motherboard_expandability_fallback(specs: Dict, text: str) -> Dict:
+    """取得できる情報が乏しいマザーボード向けに、拡張性キーの下限値を補完する。"""
+    raw = (text or "").lower()
+    form_factor = str(specs.get("form_factor", "") or "").lower()
+    chipset = str(specs.get("chipset", "") or "").lower()
+
+    if not form_factor:
+        if any(k in raw for k in ("e-atx", "eatx", "extended atx")):
+            form_factor = "eatx"
+        elif any(k in raw for k in ("mini-itx", "mini itx", "mitx")):
+            form_factor = "mini-itx"
+        elif any(k in raw for k in ("micro-atx", "micro atx", "microatx", "m-atx", "matx")):
+            form_factor = "micro-atx"
+        elif "atx" in raw:
+            form_factor = "atx"
+
+    base = {
+        "usb_total": 6,
+        "pcie_slots": 2,
+        "pcie_x16_slots": 1,
+        "m2_slots": 1,
+        "type_c_ports": 0,
+    }
+    if form_factor in ("eatx", "e-atx"):
+        base.update({"usb_total": 10, "pcie_slots": 5, "pcie_x16_slots": 2, "m2_slots": 3, "type_c_ports": 1})
+    elif form_factor == "atx":
+        base.update({"usb_total": 8, "pcie_slots": 4, "pcie_x16_slots": 1, "m2_slots": 2, "type_c_ports": 1})
+    elif form_factor in ("micro-atx", "microatx"):
+        base.update({"usb_total": 7, "pcie_slots": 3, "pcie_x16_slots": 1, "m2_slots": 2, "type_c_ports": 1})
+    elif form_factor in ("mini-itx", "mini itx"):
+        base.update({"usb_total": 6, "pcie_slots": 1, "pcie_x16_slots": 1, "m2_slots": 1, "type_c_ports": 1})
+
+    high_end_chipsets = ("x870e", "x870", "x670e", "x670", "z890", "z790", "z690", "w790")
+    if any(token in chipset for token in high_end_chipsets) or any(token in raw for token in high_end_chipsets):
+        base["m2_slots"] = max(base["m2_slots"], 3)
+        base["usb_total"] = max(base["usb_total"], 8)
+        base["type_c_ports"] = max(base["type_c_ports"], 1)
+
+    for key, value in base.items():
+        current = specs.get(key)
+        if current in (None, "", 0):
+            specs[key] = value
     return specs
 
 
@@ -781,6 +878,74 @@ def _extract_case_fan_specs_from_product_page(
     return extracted
 
 
+def _extract_motherboard_expandability_from_product_page(
+    product_url: str,
+    headers: Dict[str, str],
+    timeout: int,
+    session: Optional[requests.Session],
+) -> Dict:
+    """マザーボード商品ページ本文から USB/PCIe/M.2 の本数ヒントを抽出する。"""
+    extracted: Dict = {}
+    if not product_url:
+        return extracted
+
+    client = session or requests.Session()
+    response = client.get(product_url, headers=headers, timeout=timeout)
+    response.raise_for_status()
+    soup = BeautifulSoup(response.content, "html.parser")
+    text = " ".join(soup.stripped_strings)
+
+    m2_values = []
+    for pattern in (
+        r"M\.2[^\n]{0,24}?(?:x|×)\s*(\d+)",
+        r"M\.2[^\n]{0,24}?(\d+)\s*(?:基|本|スロット)",
+    ):
+        m2_values.extend(re.findall(pattern, text, re.IGNORECASE))
+    if m2_values:
+        extracted["m2_slots"] = max(int(v) for v in m2_values)
+
+    pcie_x16_values = re.findall(r"PCI(?:e|\s*Express)[^\n]{0,20}?x16[^\n]{0,10}?(?:x|×|：|:)\s*(\d+)", text, re.IGNORECASE)
+    if pcie_x16_values:
+        extracted["pcie_x16_slots"] = max(int(v) for v in pcie_x16_values)
+
+    pcie_total = 0
+    for lane in ("16", "8", "4", "1"):
+        lane_values = re.findall(
+            rf"PCI(?:e|\s*Express)[^\n]{{0,24}}?x{lane}[^\n]{{0,10}}?(?:x|×|：|:)\s*(\d+)",
+            text,
+            re.IGNORECASE,
+        )
+        for value in lane_values:
+            try:
+                pcie_total += int(value)
+            except (TypeError, ValueError):
+                continue
+    if pcie_total > 0:
+        extracted["pcie_slots"] = pcie_total
+
+    usb_total = 0
+    for value in re.findall(r"USB[^\n]{0,32}?(?:x|×|：|:)\s*(\d+)", text, re.IGNORECASE):
+        try:
+            usb_total += int(value)
+        except (TypeError, ValueError):
+            continue
+    if usb_total > 0:
+        extracted["usb_total"] = min(usb_total, 40)
+
+    type_c_total = 0
+    for value in re.findall(r"(?:Type\s*[- ]?C|USB\s*[- ]?C)[^\n]{0,18}?(?:x|×|：|:)\s*(\d+)", text, re.IGNORECASE):
+        try:
+            type_c_total += int(value)
+        except (TypeError, ValueError):
+            continue
+    if type_c_total > 0:
+        extracted["type_c_ports"] = min(type_c_total, 10)
+
+    _apply_motherboard_expandability_fallback(extracted, text)
+
+    return extracted
+
+
 def _build_parts_from_products_map(
     products_map: Dict[str, Dict],
     base_url: str,
@@ -791,6 +956,7 @@ def _build_parts_from_products_map(
 ) -> List[Dict]:
     collected: List[Dict] = []
     page_fan_specs_cache: Dict[str, Dict] = {}
+    motherboard_specs_cache: Dict[str, Dict] = {}
     for code, info in products_map.items():
         name = (info.get("pname") or "").strip()
         price = _normalize_price(str(info.get("amttax") or ""))
@@ -824,6 +990,26 @@ def _build_parts_from_products_map(
                     page_specs = {}
                 page_fan_specs_cache[full_url] = page_specs
                 extracted.update(page_specs)
+
+        if part_type == "motherboard" and headers and (
+            "usb_total" not in extracted
+            or "pcie_slots" not in extracted
+            or "m2_slots" not in extracted
+        ):
+            if full_url in motherboard_specs_cache:
+                extracted.update(motherboard_specs_cache[full_url])
+            else:
+                try:
+                    mb_specs = _extract_motherboard_expandability_from_product_page(
+                        product_url=full_url,
+                        headers=headers,
+                        timeout=timeout,
+                        session=session,
+                    )
+                except Exception:
+                    mb_specs = {}
+                motherboard_specs_cache[full_url] = mb_specs
+                extracted.update(mb_specs)
 
         part_specs = {
             "source": "dospara",

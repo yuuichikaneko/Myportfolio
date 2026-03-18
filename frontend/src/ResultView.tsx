@@ -351,6 +351,38 @@ export function ResultView({ config, onBack }: ResultProps) {
     };
   };
 
+  const inferMemoryCapacityGb = (part: NormalizedResultPart) => {
+    const specCapacity = Number(part.specs?.capacity_gb ?? 0);
+    if (specCapacity > 0) {
+      return specCapacity;
+    }
+
+    const text = part.name;
+    const multiMatch = text.match(/(\d+)\s*GB\s*[x×*]\s*(\d+)/i) || text.match(/(\d+)\s*GB\s*(\d+)\s*枚組/i);
+    if (multiMatch) {
+      return Number(multiMatch[1]) * Number(multiMatch[2]);
+    }
+
+    const singleMatch = text.match(/(\d+)\s*GB/i);
+    if (singleMatch) {
+      return Number(singleMatch[1]);
+    }
+    return 0;
+  };
+
+  const inferMemoryModuleCount = (part: NormalizedResultPart) => {
+    const specModule = Number(part.specs?.module_count ?? 0);
+    if (specModule > 0) {
+      return specModule;
+    }
+    const text = part.name;
+    const multiMatch = text.match(/[x×*]\s*(\d+)/i) || text.match(/(\d+)\s*枚組/i);
+    if (multiMatch) {
+      return Number(multiMatch[1]);
+    }
+    return 1;
+  };
+
   const storageAlternatives = useMemo(() => {
     if (!storageInventory || !selectedStoragePart) {
       return [] as StorageInventoryItem[];
@@ -545,14 +577,16 @@ export function ResultView({ config, onBack }: ResultProps) {
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-6">
       <div className="max-w-4xl mx-auto">
-        <button
-          onClick={onBack}
-          className="mb-6 px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition"
-        >
-          ← 戻る
-        </button>
+        <div className="sticky top-4 z-30 mb-6 flex justify-start">
+          <button
+            onClick={onBack}
+            className="rounded-lg bg-slate-600 px-4 py-2 font-semibold text-white shadow hover:bg-slate-700 transition"
+          >
+            ← 戻る
+          </button>
+        </div>
 
-        <div className="bg-white rounded-lg shadow-lg p-8">
+        <div className="bg-white rounded-lg shadow-lg p-8 pb-28">
           <h2 className="text-3xl font-bold text-gray-800 mb-2">
             構成提案が完成しました！
           </h2>
@@ -622,6 +656,8 @@ export function ResultView({ config, onBack }: ResultProps) {
               const isCaseWithoutIncludedFans = part.category === "case" && Number(part.specs?.included_fan_count ?? -1) === 0;
               const categoryLabel = PART_CATEGORY_LABELS[part.category] ?? part.category;
               const psuCapacityWatts = part.category === "psu" ? parsePsuCapacityWatts(part.name) : null;
+              const memoryCapacityGb = part.category === "memory" ? inferMemoryCapacityGb(part) : 0;
+              const memoryModuleCount = part.category === "memory" ? inferMemoryModuleCount(part) : 0;
               return (
                 <div
                   key={index}
@@ -654,6 +690,15 @@ export function ResultView({ config, onBack }: ResultProps) {
                       </p>
                     )}
                   </div>
+
+                  {part.category === "memory" && memoryCapacityGb > 0 && (
+                    <p className="mb-2 text-xs text-slate-600">
+                      合計容量: <span className="font-semibold text-slate-800">{memoryCapacityGb}GB</span>
+                      {memoryModuleCount > 1 && (
+                        <span className="ml-2">({Math.max(1, Math.floor(memoryCapacityGb / memoryModuleCount))}GB x {memoryModuleCount})</span>
+                      )}
+                    </p>
+                  )}
 
                   {isCaseWithoutIncludedFans && (
                     <div className="mb-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800">
@@ -741,9 +786,14 @@ export function ResultView({ config, onBack }: ResultProps) {
             })}
           </div>
 
+        </div>
+      </div>
+
+      <div className="fixed inset-x-0 bottom-0 z-40 border-t border-slate-200 bg-white/95 backdrop-blur">
+        <div className="mx-auto flex w-full max-w-4xl p-3 md:p-4">
           <button
             onClick={onBack}
-            className="mt-8 w-full px-6 py-3 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition font-bold text-lg"
+            className="w-full rounded-lg bg-indigo-600 px-4 py-3 font-bold text-white transition hover:bg-indigo-700"
           >
             別の構成を生成
           </button>
