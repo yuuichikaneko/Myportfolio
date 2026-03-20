@@ -1,0 +1,27 @@
+バックエンド・フロントエンド 手動起動手順（Windows PowerShell）
+
+1. プロジェクトフォルダへ移動
+Set-Location F:\Python\Myportfolio
+
+2. Python仮想環境を有効化
+& .\.venv\Scripts\Activate.ps1
+
+3. バックエンド（Django）を起動
+.\.venv\Scripts\python.exe .\django\manage.py runserver 8001
+
+バックエンドURL:
+http://127.0.0.1:8001
+
+4. 別のPowerShellを新しく開いて、フロントエンドを起動
+Set-Location F:\Python\Myportfolio\frontend
+npm run dev
+
+フロントエンドURL:
+http://127.0.0.1:5173
+
+5. 停止方法
+各ターミナルで Ctrl + C
+
+補足
+- 初回のみ frontend フォルダで npm install が必要です。
+- ポート競合時は runserver のポート番号を変更してください（例: 8002）。

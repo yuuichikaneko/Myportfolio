@@ -872,7 +872,7 @@ class ScraperApiTests(APITestCase):
 		spec_parts = {p['category']: p for p in spec_response.data['parts']}
 
 		self.assertIn('DDR4', cost_parts['memory']['name'])
-		self.assertIn('8GB', cost_parts['memory']['name'])
+		self.assertIn('16GB', cost_parts['memory']['name'])
 		self.assertIn('DDR4', cost_parts['motherboard']['name'])
 
 		self.assertIn('DDR5', spec_parts['memory']['name'])
@@ -880,6 +880,260 @@ class ScraperApiTests(APITestCase):
 			('32GB' in spec_parts['memory']['name']) or ('64GB' in spec_parts['memory']['name'])
 		)
 		self.assertIn('DDR5', spec_parts['motherboard']['name'])
+
+	def test_generate_config_gaming_cost_falls_back_to_8gb_when_16gb_unavailable(self):
+		PCPart.objects.create(
+			part_type='cpu',
+			name='Intel Core i5 14400F Fallback',
+			price=32000,
+			specs={'socket': 'LGA1700'},
+			url='https://example.com/cpu-intel-14400f-fallback',
+		)
+		PCPart.objects.create(
+			part_type='motherboard',
+			name='B760 DDR4 Board Fallback',
+			price=14000,
+			specs={'socket': 'LGA1700', 'memory_type': 'DDR4', 'form_factor': 'MicroATX'},
+			url='https://example.com/mb-b760-ddr4-fallback',
+		)
+		PCPart.objects.create(
+			part_type='memory',
+			name='DDR4 8GB Cost Memory Fallback',
+			price=3000,
+			specs={'memory_type': 'DDR4', 'capacity_gb': 8},
+			url='https://example.com/mem-ddr4-8-fallback',
+		)
+		PCPart.objects.create(
+			part_type='storage',
+			name='NVMe 1TB Fallback',
+			price=12000,
+			specs={'interface': 'NVMe', 'capacity_gb': 1000},
+			url='https://example.com/ssd-fallback',
+		)
+		PCPart.objects.create(
+			part_type='psu',
+			name='750W PSU Fallback',
+			price=9000,
+			specs={'wattage': 750},
+			url='https://example.com/psu-fallback',
+		)
+		PCPart.objects.create(
+			part_type='case',
+			name='ATX Case Fallback',
+			price=9000,
+			specs={'supported_form_factors': ['MicroATX', 'ATX']},
+			url='https://example.com/case-fallback',
+		)
+
+		response = self.client.post(
+			'/api/configurations/generate/',
+			{
+				'budget': 220000,
+				'usage': 'gaming',
+				'cpu_vendor': 'intel',
+				'build_priority': 'cost',
+			},
+			format='json',
+		)
+
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+		parts = {p['category']: p for p in response.data['parts']}
+		self.assertIn('DDR4', parts['memory']['name'])
+		self.assertIn('8GB', parts['memory']['name'])
+
+	def test_generate_config_business_cost_prefers_16gb_at_250k(self):
+		"""business+cost @ 250k で 16GB preference が機能することを確認"""
+		PCPart.objects.create(
+			part_type='cpu',
+			name='AMD Ryzen 5 5600G',
+			price=28000,
+			specs={'socket': 'AM4'},
+			url='https://example.com/cpu-ryzen5-5600g-business',
+		)
+		PCPart.objects.create(
+			part_type='motherboard',
+			name='A520 DDR4 Board Business',
+			price=8000,
+			specs={'socket': 'AM4', 'memory_type': 'DDR4', 'form_factor': 'MicroATX'},
+			url='https://example.com/mb-a520-ddr4-business',
+		)
+		PCPart.objects.create(
+			part_type='memory',
+			name='DDR4 8GB Business Cost',
+			price=3000,
+			specs={'memory_type': 'DDR4', 'capacity_gb': 8},
+			url='https://example.com/mem-ddr4-8-business',
+		)
+		PCPart.objects.create(
+			part_type='memory',
+			name='DDR4 16GB Business Cost',
+			price=5500,
+			specs={'memory_type': 'DDR4', 'capacity_gb': 16},
+			url='https://example.com/mem-ddr4-16-business',
+		)
+		PCPart.objects.create(
+			part_type='storage',
+			name='NVMe 512GB Business',
+			price=6000,
+			specs={'interface': 'NVMe', 'capacity_gb': 512},
+			url='https://example.com/ssd-512-business',
+		)
+		PCPart.objects.create(
+			part_type='psu',
+			name='500W PSU Business',
+			price=6000,
+			specs={'wattage': 500},
+			url='https://example.com/psu-500-business',
+		)
+		PCPart.objects.create(
+			part_type='case',
+			name='MicroATX Case Business',
+			price=5000,
+			specs={'supported_form_factors': ['MicroATX', 'ATX']},
+			url='https://example.com/case-microatx-business',
+		)
+
+		response = self.client.post(
+			'/api/configurations/generate/',
+			{
+				'budget': 250000,
+				'usage': 'business',
+				'build_priority': 'cost',
+			},
+			format='json',
+		)
+
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+		parts = {p['category']: p for p in response.data['parts']}
+		self.assertIn('DDR4', parts['memory']['name'])
+		self.assertIn('16GB', parts['memory']['name'])
+
+	def test_generate_config_business_cost_falls_back_to_8gb_when_16gb_unavailable(self):
+		"""business+cost で 16GB 在庫切れ時に 8GB にfallback することを確認"""
+		PCPart.objects.create(
+			part_type='cpu',
+			name='Intel Core i5 10400F Business Fallback',
+			price=26000,
+			specs={'socket': 'LGA1200'},
+			url='https://example.com/cpu-i5-10400f-business-fb',
+		)
+		PCPart.objects.create(
+			part_type='motherboard',
+			name='B460 DDR4 Board Business Fallback',
+			price=10000,
+			specs={'socket': 'LGA1200', 'memory_type': 'DDR4', 'form_factor': 'MicroATX'},
+			url='https://example.com/mb-b460-ddr4-business-fb',
+		)
+		PCPart.objects.create(
+			part_type='memory',
+			name='DDR4 8GB Only Option',
+			price=3500,
+			specs={'memory_type': 'DDR4', 'capacity_gb': 8},
+			url='https://example.com/mem-ddr4-8-only-business',
+		)
+		PCPart.objects.create(
+			part_type='storage',
+			name='NVMe 512GB Fallback',
+			price=6500,
+			specs={'interface': 'NVMe', 'capacity_gb': 512},
+			url='https://example.com/ssd-512-business-fb',
+		)
+		PCPart.objects.create(
+			part_type='psu',
+			name='450W PSU Fallback',
+			price=5500,
+			specs={'wattage': 450},
+			url='https://example.com/psu-450-business-fb',
+		)
+		PCPart.objects.create(
+			part_type='case',
+			name='Compact Case Fallback',
+			price=4500,
+			specs={'supported_form_factors': ['MicroATX']},
+			url='https://example.com/case-compact-fb',
+		)
+
+		response = self.client.post(
+			'/api/configurations/generate/',
+			{
+				'budget': 270000,
+				'usage': 'business',
+				'build_priority': 'cost',
+			},
+			format='json',
+		)
+
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+		parts = {p['category']: p for p in response.data['parts']}
+		self.assertIn('DDR4', parts['memory']['name'])
+		self.assertIn('8GB', parts['memory']['name'])
+
+	def test_generate_config_standard_cost_uses_same_16gb_preference_logic(self):
+		"""standard+cost でも business と同じ 16GB preference ロジックを確認"""
+		PCPart.objects.create(
+			part_type='cpu',
+			name='AMD Ryzen 5 5500',
+			price=25000,
+			specs={'socket': 'AM4'},
+			url='https://example.com/cpu-ryzen5-5500-standard',
+		)
+		PCPart.objects.create(
+			part_type='motherboard',
+			name='A520 DDR4 Standard',
+			price=9000,
+			specs={'socket': 'AM4', 'memory_type': 'DDR4', 'form_factor': 'MicroATX'},
+			url='https://example.com/mb-a520-ddr4-standard',
+		)
+		PCPart.objects.create(
+			part_type='memory',
+			name='DDR4 8GB Standard',
+			price=3200,
+			specs={'memory_type': 'DDR4', 'capacity_gb': 8},
+			url='https://example.com/mem-ddr4-8-standard',
+		)
+		PCPart.objects.create(
+			part_type='memory',
+			name='DDR4 16GB Standard',
+			price=5800,
+			specs={'memory_type': 'DDR4', 'capacity_gb': 16},
+			url='https://example.com/mem-ddr4-16-standard',
+		)
+		PCPart.objects.create(
+			part_type='storage',
+			name='SSD 512GB Standard',
+			price=6200,
+			specs={'interface': 'NVMe', 'capacity_gb': 512},
+			url='https://example.com/ssd-512-standard',
+		)
+		PCPart.objects.create(
+			part_type='psu',
+			name='500W PSU Standard',
+			price=5800,
+			specs={'wattage': 500},
+			url='https://example.com/psu-500-standard',
+		)
+		PCPart.objects.create(
+			part_type='case',
+			name='ATX Case Standard',
+			price=5200,
+			specs={'supported_form_factors': ['MicroATX', 'ATX']},
+			url='https://example.com/case-atx-standard',
+		)
+
+		response = self.client.post(
+			'/api/configurations/generate/',
+			{
+				'budget': 230000,
+				'usage': 'standard',
+				'build_priority': 'cost',
+			},
+			format='json',
+		)
+
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+		parts = {p['category']: p for p in response.data['parts']}
+		self.assertIn('DDR4', parts['memory']['name'])
+		self.assertIn('16GB', parts['memory']['name'])
 
 	def test_generate_config_uses_surplus_budget_to_upgrade_memory(self):
 		PCPart.objects.create(
@@ -1834,6 +2088,109 @@ class ScraperApiTests(APITestCase):
 		parts = {p['category']: p for p in response.data['parts']}
 		self.assertIn('High Airflow Mesh', parts['case']['name'])
 
+	def test_generate_config_premium_gaming_avoids_budget_fixed_motherboard_and_case(self):
+		PCPart.objects.all().delete()
+
+		PCPart.objects.create(
+			part_type='cpu',
+			name='AMD Ryzen 7 9700X',
+			price=52800,
+			specs={'socket': 'AM5'},
+			url='https://example.com/cpu-9700x-premium',
+		)
+		PCPart.objects.create(
+			part_type='cpu_cooler',
+			name='Tower Air Cooler 120mm',
+			price=5980,
+			specs={},
+			url='https://example.com/cooler-120',
+		)
+		PCPart.objects.create(
+			part_type='gpu',
+			name='Palit GeForce RTX 5070 12GB',
+			price=119800,
+			specs={'vram': '12GB'},
+			url='https://example.com/gpu-5070',
+		)
+		PCPart.objects.create(
+			part_type='motherboard',
+			name='GIGABYTE B550 GAMING X V2 (B550 AM4 ATX)',
+			price=14980,
+			specs={'socket': 'AM5', 'memory_type': 'DDR5', 'form_factor': 'ATX'},
+			url='https://example.com/mb-b550-gaming-x-v2',
+		)
+		PCPart.objects.create(
+			part_type='motherboard',
+			name='MSI PRO X870-P WIFI (X870 AM5 ATX)',
+			price=69800,
+			specs={'socket': 'AM5', 'memory_type': 'DDR5', 'chipset': 'X870', 'form_factor': 'ATX'},
+			url='https://example.com/mb-x870-premium',
+		)
+		PCPart.objects.create(
+			part_type='memory',
+			name='DDR5 32GB 6000',
+			price=17980,
+			specs={'memory_type': 'DDR5', 'capacity_gb': 32, 'speed_mhz': 6000},
+			url='https://example.com/mem-ddr5-32',
+		)
+		PCPart.objects.create(
+			part_type='storage',
+			name='NVMe SSD 1TB',
+			price=9980,
+			specs={'media_type': 'ssd', 'interface': 'NVMe', 'capacity_gb': 1000},
+			url='https://example.com/ssd-1tb',
+		)
+		PCPart.objects.create(
+			part_type='os',
+			name='Windows 11 Home',
+			price=16800,
+			specs={},
+			url='https://example.com/windows-11',
+		)
+		PCPart.objects.create(
+			part_type='psu',
+			name='850W Gold PSU',
+			price=13980,
+			specs={'wattage': 850},
+			url='https://example.com/psu-850',
+		)
+		PCPart.objects.create(
+			part_type='case',
+			name='ZALMAN T8 (ATX)',
+			price=3980,
+			specs={'supported_form_factors': ['ATX'], 'included_fan_count': 1, 'supported_fan_count': 3},
+			url='https://example.com/case-zalman-t8',
+		)
+		PCPart.objects.create(
+			part_type='case',
+			name='High Airflow Mesh ATX Case',
+			price=12980,
+			specs={
+				'supported_form_factors': ['ATX'],
+				'included_fan_count': 4,
+				'supported_fan_count': 8,
+				'max_radiator_mm': 360,
+			},
+			url='https://example.com/case-airflow-mesh',
+		)
+
+		response = self.client.post(
+			'/api/configurations/generate/',
+			{
+				'budget': 600000,
+				'usage': 'gaming',
+				'build_priority': 'cost',
+				'case_size': 'mid',
+				'case_fan_policy': 'auto',
+			},
+			format='json',
+		)
+
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+		parts = {p['category']: p for p in response.data['parts']}
+		self.assertNotIn('B550 GAMING X V2', parts['motherboard']['name'])
+		self.assertNotIn('ZALMAN T8', parts['case']['name'])
+
 	def test_generate_config_gaming_spec_prefers_rtx_or_rx_gpu(self):
 		PCPart.objects.create(
 			part_type='gpu',
@@ -2279,6 +2636,83 @@ class ScraperApiTests(APITestCase):
 		self.assertEqual(generate_response.status_code, status.HTTP_200_OK)
 		self.assertEqual(Configuration.objects.count(), before_count + 1)
 		self.assertEqual(status_response.status_code, status.HTTP_200_OK)
+
+	def test_generate_config_gaming_cost_prefers_x3d_cpu_over_non_x3d(self):
+		"""gaming+cost で X3D CPU が非 X3D CPU より優先されることを確認"""
+		# X3D CPU
+		PCPart.objects.create(
+			part_type='cpu',
+			name='AMD Ryzen 5 5600X3D (6C/12T X3D)',
+			price=38000,
+			specs={'socket': 'AM4', 'cores': 6, 'threads': 12},
+			url='https://example.com/cpu-ryzen5-5600x3d',
+		)
+		# 非 X3D CPU（起動用フォールバック）
+		PCPart.objects.create(
+			part_type='cpu',
+			name='AMD Ryzen 5 5600 (6C/12T)',
+			price=28000,
+			specs={'socket': 'AM4', 'cores': 6, 'threads': 12},
+			url='https://example.com/cpu-ryzen5-5600',
+		)
+		PCPart.objects.create(
+			part_type='motherboard',
+			name='B550 DDR4 Board X3D Test',
+			price=12000,
+			specs={'socket': 'AM4', 'memory_type': 'DDR4', 'form_factor': 'MicroATX'},
+			url='https://example.com/mb-b550-ddr4-x3d-test',
+		)
+		PCPart.objects.create(
+			part_type='memory',
+			name='DDR4 16GB Budget X3D',
+			price=7000,
+			specs={'memory_type': 'DDR4', 'capacity_gb': 16},
+			url='https://example.com/mem-ddr4-16-x3d',
+		)
+		PCPart.objects.create(
+			part_type='gpu',
+			name='ASUS RTX 4060 8GB X3D',
+			price=48000,
+			specs={'vram': '8GB'},
+			url='https://example.com/gpu-rtx4060-x3d',
+		)
+		PCPart.objects.create(
+			part_type='storage',
+			name='NVMe 512GB X3D',
+			price=8000,
+			specs={'interface': 'NVMe', 'capacity_gb': 512},
+			url='https://example.com/ssd-512-x3d',
+		)
+		PCPart.objects.create(
+			part_type='psu',
+			name='650W PSU X3D',
+			price=8000,
+			specs={'wattage': 650},
+			url='https://example.com/psu-650-x3d',
+		)
+		PCPart.objects.create(
+			part_type='case',
+			name='Mid Tower Case X3D',
+			price=7000,
+			specs={'supported_form_factors': ['MicroATX', 'ATX']},
+			url='https://example.com/case-mid-x3d',
+		)
+
+		response = self.client.post(
+			'/api/configurations/generate/',
+			{
+				'budget': 180000,
+				'usage': 'gaming',
+				'build_priority': 'cost',
+			},
+			format='json',
+		)
+
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+		parts = {p['category']: p for p in response.data['parts']}
+		# X3D CPU が選ばれることを確認
+		self.assertIn('X3D', parts['cpu']['name'])
+		self.assertIn('5600X3D', parts['cpu']['name'])
 
 
 class DosparaScraperTests(APITestCase):
