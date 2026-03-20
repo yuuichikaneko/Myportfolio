@@ -257,10 +257,6 @@ def _is_part_suitable(part_type, part):
         if keyword in text:
             return False
 
-    # Intel Core i 13/14世代は安定性ポリシー上、常に除外する。
-    if part_type == 'cpu' and UNSTABLE_INTEL_CORE_I_PATTERN.search(part.name or ''):
-        return False
-
     url = (part.url or '').lower()
     for hint in UNSUITABLE_URL_HINTS.get(part_type, []):
         if hint in url:
@@ -1430,7 +1426,7 @@ def _preferred_motherboard_form_factors(case_size):
     if case_size == 'full':
         return ('eatx', 'atx')
     if case_size == 'mid':
-        return ('atx', 'eatx')
+        return ('atx', 'micro-atx', 'eatx')
     if case_size == 'mini':
         return ('mini-itx',)
     return tuple()
@@ -1765,10 +1761,11 @@ def _pick_part_by_target(part_type, budget, usage, weights_override=None, option
             ]
             if capacity_filtered:
                 candidates = capacity_filtered
-        # メインストレージはSSD限定。SSD候補のみを対象にする。
-        ssd_filtered = [p for p in candidates if _infer_storage_media_type(p) == 'ssd']
-        if ssd_filtered:
-            candidates = ssd_filtered
+        # 既定はSSD優先。gaming+specのみ高容量HDDのフォールバックを許容する。
+        if not (usage == 'gaming' and build_priority == 'spec'):
+            ssd_filtered = [p for p in candidates if _infer_storage_media_type(p) == 'ssd']
+            if ssd_filtered:
+                candidates = ssd_filtered
     elif part_type == 'psu':
         if required_psu_wattage is not None:
             psu_filtered = [
@@ -2375,7 +2372,7 @@ def _storage_profile_pick(candidates, build_priority, storage_preference='ssd'):
     if not candidates:
         return None
 
-    # メインストレージはHDD不可。SSD候補が存在する場合は必ずSSDを選ぶ。
+    # 既定はSSD優先。ただし gaming+spec では高容量HDDのフォールバックを許容する。
     ssd_candidates = [p for p in candidates if _infer_storage_media_type(p) == 'ssd']
     if ssd_candidates:
         candidates = ssd_candidates
@@ -2423,6 +2420,24 @@ def _storage_profile_pick(candidates, build_priority, storage_preference='ssd'):
 
     if build_priority == 'spec':
         # スペック重視: SSD > HDD、NVMe > SATA を最優先。
+        # ただし SSD が 1TB未満しかない場合で、1TB以上のHDDがあるなら容量優先でHDDを許容する。
+        all_ssd = [p for p in candidates if _infer_storage_media_type(p) == 'ssd']
+        all_hdd = [p for p in (ssd_candidates or []) if _infer_storage_media_type(p) == 'hdd']
+        if not all_hdd:
+            all_hdd = [p for p in PCPart.objects.filter(part_type='storage').order_by('price') if _is_part_suitable('storage', p) and _infer_storage_media_type(p) == 'hdd']
+
+        if all_ssd and all_hdd:
+            max_ssd_capacity = max(_capacity(p) for p in all_ssd)
+            high_capacity_hdd = [p for p in all_hdd if _capacity(p) >= 1000]
+            if max_ssd_capacity < 1000 and high_capacity_hdd:
+                return sorted(
+                    high_capacity_hdd,
+                    key=lambda p: (
+                        -_capacity(p),
+                        p.price,
+                    ),
+                )[0]
+
         # 同一メディア・インターフェース階層内では 1TB+ を優先し、最安値を選ぶ。
         # 最高価格を選ぶと予算を大幅超過してダウングレードループが起きHDDが残るため。
         return sorted(
@@ -2527,13 +2542,13 @@ def _matches_selection_options(part_type, part, options=None):
     if part_type == 'cpu_cooler':
         if not _is_cpu_cooler_product(part):
             return False
-        if usage != 'creator' and not _is_cpu_cooler_type_match(part, cooler_type):
+        if not _is_cpu_cooler_type_match(part, cooler_type):
             return False
         if not _is_allowed_cpu_cooler_brand(part):
             return False
         if usage == 'creator' and not (_is_liquid_cooler(part) or _is_dual_tower_cooler(part)):
             return False
-        if usage != 'creator' and cooler_type == 'liquid' and radiator_size != 'any' and not _is_radiator_size_match(part, radiator_size):
+        if cooler_type == 'liquid' and radiator_size != 'any' and not _is_radiator_size_match(part, radiator_size):
             return False
         return True
 
@@ -2592,7 +2607,8 @@ def _matches_selection_options(part_type, part, options=None):
         return True
 
     if part_type == 'storage':
-        if enforce_main_storage_ssd and _infer_storage_media_type(part) != 'ssd':
+        allow_hdd_fallback = usage == 'gaming' and options.get('build_priority') == 'spec'
+        if enforce_main_storage_ssd and not allow_hdd_fallback and _infer_storage_media_type(part) != 'ssd':
             return False
         if min_storage_capacity_gb:
             capacity_gb = _infer_storage_capacity_gb(part)
@@ -2784,7 +2800,7 @@ def _downgrade_selected_parts(selected_parts, total_price, budget, options=None)
                 c for c in PCPart.objects.filter(part_type=part_type, price__lt=current.price).order_by('-price')
                 if _is_part_suitable(part_type, c) and _matches_selection_options(part_type, c, options=options)
             ]
-            if part_type == 'storage':
+            if part_type == 'storage' and options.get('build_priority') != 'spec':
                 cheaper_candidates = [c for c in cheaper_candidates if _infer_storage_media_type(c) == 'ssd']
             cheaper = None
             if cheaper_candidates:
@@ -2989,8 +3005,28 @@ def _rebalance_gaming_spec_gpu_memory(selected_parts, budget, usage, options=Non
 
     gpu = selected_parts.get('gpu')
     memory = selected_parts.get('memory')
-    if not gpu or not memory:
+    if not gpu:
         return selected_parts
+
+    if not memory:
+        # 過程でメモリが欠落した場合、現行マザーボード条件で復元を試みる。
+        mb = selected_parts.get('motherboard')
+        recover_options = dict(options)
+        if mb:
+            mb_mem_type = _infer_motherboard_memory_type(mb)
+            if mb_mem_type:
+                recover_options['motherboard_memory_type'] = mb_mem_type
+        recovered_memories = [
+            p for p in PCPart.objects.filter(part_type='memory').order_by('price')
+            if _is_part_suitable('memory', p) and _matches_selection_options('memory', p, options=recover_options)
+        ]
+        if recovered_memories:
+            repaired = dict(selected_parts)
+            repaired['memory'] = recovered_memories[0]
+            selected_parts = repaired
+            memory = repaired.get('memory')
+        else:
+            return selected_parts
 
     if gpu.price >= memory.price:
         return selected_parts
@@ -3117,6 +3153,43 @@ def _enforce_gaming_spec_gpu_not_lower_than_memory(selected_parts, usage, option
     ]
     memory_candidates = [p for p in memory_candidates if p.price <= gpu.price]
     if not memory_candidates:
+        # 現行マザーボード制約で解決できない場合、マザーボード+メモリを同時に再選定する。
+        current_mb = selected_parts.get('motherboard')
+        if not current_mb:
+            return selected_parts
+
+        current_total = _sum_selected_price(selected_parts)
+        mb_candidates = [
+            p
+            for p in PCPart.objects.filter(part_type='motherboard').order_by('price')
+            if _is_part_suitable('motherboard', p) and _matches_selection_options('motherboard', p, options=options)
+        ]
+        mb_candidates = _prefer_motherboard_candidates(mb_candidates, options.get('case_size', 'any'))
+
+        for mb_candidate in mb_candidates:
+            mb_options = dict(options)
+            mb_mem_type = _infer_motherboard_memory_type(mb_candidate)
+            if mb_mem_type:
+                mb_options['motherboard_memory_type'] = mb_mem_type
+
+            mb_memory_candidates = [
+                p
+                for p in PCPart.objects.filter(part_type='memory').order_by('price')
+                if _is_part_suitable('memory', p)
+                and _matches_selection_options('memory', p, options=mb_options)
+                and p.price <= gpu.price
+            ]
+            if not mb_memory_candidates:
+                continue
+
+            memory_candidate = mb_memory_candidates[-1]
+            trial_total = current_total - current_mb.price - memory.price + mb_candidate.price + memory_candidate.price
+            if trial_total <= options.get('budget', 10**9):
+                adjusted = dict(selected_parts)
+                adjusted['motherboard'] = mb_candidate
+                adjusted['memory'] = memory_candidate
+                return adjusted
+
         return selected_parts
 
     adjusted = dict(selected_parts)
@@ -3384,6 +3457,9 @@ def _upgrade_to_liquid_cooler_with_surplus(selected_parts, budget, usage, option
 
     liquid_options = dict(options)
     liquid_options['cooler_type'] = 'liquid'
+    # 余剰アップグレード時は、ユーザー指定の初期ラジエーターサイズ制約より
+    # 「水冷化そのもの」を優先する。
+    liquid_options['radiator_size'] = 'any'
 
     current_case = selected_parts.get('case')
 
@@ -3501,6 +3577,16 @@ def _enforce_gaming_spec_prefers_nvme_storage(selected_parts, budget, usage, opt
 
     current_media = _infer_storage_media_type(storage)
     current_interface = _infer_storage_interface(storage)
+
+    # 現行が高容量HDDで、SSD候補が1TB未満しかない場合はHDDを維持する。
+    if current_media == 'hdd' and _infer_storage_capacity_gb(storage) >= 1000:
+        ssd_candidates = [
+            p for p in PCPart.objects.filter(part_type='storage').order_by('price')
+            if _is_part_suitable('storage', p) and _infer_storage_media_type(p) == 'ssd'
+        ]
+        if ssd_candidates and max(_infer_storage_capacity_gb(p) for p in ssd_candidates) < 1000:
+            return selected_parts
+
     if current_media == 'ssd' and current_interface == 'nvme':
         return selected_parts
 
@@ -3566,6 +3652,10 @@ def _enforce_main_storage_ssd(selected_parts, budget, usage, options=None):
     options = options or {}
     storage = selected_parts.get('storage')
     if not storage:
+        return selected_parts
+
+    # gaming+spec では高容量HDDフォールバックを許容する。
+    if usage == 'gaming' and options.get('build_priority') == 'spec':
         return selected_parts
 
     if _infer_storage_media_type(storage) == 'ssd':
@@ -3764,7 +3854,7 @@ def _enforce_creator_staged_requirements(selected_parts, budget, usage, options=
             preferred_coolers,
             key=lambda p: (
                 _cpu_cooler_profile_score(p, options.get('cooling_profile', 'performance'), options.get('cooler_type', 'any')),
-                -p.price,
+                p.price,
             ),
             reverse=True,
         )
@@ -4441,6 +4531,21 @@ def build_configuration_response(
     selection_options = _refresh_selection_options_with_selected_parts(selection_options, selected_parts)
     total_price = _sum_selected_price(selected_parts)
 
+    # マザーボードの右サイズ化後にGPU/メモリ価格バランスが崩れるケースを再調整する。
+    selected_parts = _rebalance_gaming_spec_gpu_memory(
+        selected_parts,
+        budget,
+        usage,
+        options=selection_options,
+    )
+    selected_parts = _enforce_gaming_spec_gpu_not_lower_than_memory(
+        selected_parts,
+        usage,
+        options=selection_options,
+    )
+    selection_options = _refresh_selection_options_with_selected_parts(selection_options, selected_parts)
+    total_price = _sum_selected_price(selected_parts)
+
     selected_parts = _rebalance_gaming_cost_cpu_to_storage(
         selected_parts,
         budget,
@@ -4528,6 +4633,17 @@ def build_configuration_response(
         selected_parts,
         usage,
         options=selection_options,
+    )
+    selection_options = _refresh_selection_options_with_selected_parts(selection_options, selected_parts)
+    total_price = _sum_selected_price(selected_parts)
+
+    # 最終ガード: gaming+spec で GPU 価格 < メモリ価格の逆転を防ぐ。
+    final_guard_options = dict(selection_options)
+    final_guard_options['budget'] = budget
+    selected_parts = _enforce_gaming_spec_gpu_not_lower_than_memory(
+        selected_parts,
+        usage,
+        options=final_guard_options,
     )
     selection_options = _refresh_selection_options_with_selected_parts(selection_options, selected_parts)
     total_price = _sum_selected_price(selected_parts)

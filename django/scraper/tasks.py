@@ -1,6 +1,5 @@
 from datetime import timedelta
 import logging
-import re
 
 from celery import shared_task
 from django.db import transaction
@@ -10,7 +9,6 @@ from .models import PCPart, ScraperStatus
 
 
 logger = logging.getLogger(__name__)
-UNSTABLE_INTEL_CORE_I_PATTERN = re.compile(r'\bcore\s*i[3579]?[-\s]?(?:13|14)\d{3,4}[a-z]{0,3}\b', re.IGNORECASE)
 
 
 def _normalize_part_types():
@@ -76,8 +74,6 @@ def run_scraper_task():
         merged_count = 0
         with transaction.atomic():
             for part in scraped_parts:
-                if part.get('part_type') == 'cpu' and UNSTABLE_INTEL_CORE_I_PATTERN.search(part.get('name', '')):
-                    continue
                 _, created = PCPart.objects.update_or_create(
                     part_type=part['part_type'],
                     name=part['name'],
