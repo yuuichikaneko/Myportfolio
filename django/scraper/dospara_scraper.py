@@ -205,7 +205,11 @@ PART_CATEGORY_URLS: Dict[str, List[str]] = {
     "cpu_cooler":  ["https://www.dospara.co.jp/BR95"],
     "gpu":         ["https://www.dospara.co.jp/BR31"],
     "motherboard": ["https://www.dospara.co.jp/BR21", "https://www.dospara.co.jp/mb-intel", "https://www.dospara.co.jp/mb-amd"],
-    "memory":      ["https://www.dospara.co.jp/BR12", "https://www.dospara.co.jp/mem-note"],
+    "memory":      [
+        "https://www.dospara.co.jp/mem-desktop?srule=03&includeNotInventory=false",
+        "https://www.dospara.co.jp/BR12",
+        "https://www.dospara.co.jp/mem-note",
+    ],
     "storage":     ["https://www.dospara.co.jp/BR115", "https://www.dospara.co.jp/BR13", "https://www.dospara.co.jp/m2ssd"],
     "os":          ["https://www.dospara.co.jp/BR161"],
     "psu":         ["https://www.dospara.co.jp/BR83", "https://www.dospara.co.jp/SBR755"],
