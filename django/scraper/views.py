@@ -2945,7 +2945,7 @@ def _upgrade_parts_with_surplus(selected_parts, total_price, budget, usage, opti
     target_budget = budget
     if build_priority == 'cost':
         utilization_floor_by_usage = {
-            'gaming': 0.70,
+            'gaming': 0.82,
             'creator': 0.92,
             'business': 0.65,
             'standard': 0.65,
@@ -2980,8 +2980,10 @@ def _upgrade_parts_with_surplus(selected_parts, total_price, budget, usage, opti
                 # gaming + cost はDDR4/廉価MBの選定方針を維持する。
                 continue
             if part_type == 'memory' and usage == 'gaming' and build_priority == 'cost':
-                # gaming + cost は低コスト構成のメモリを維持し、余剰予算での過剰増量を避ける。
-                continue
+                # gaming + cost は基本的に低コスト構成を維持するが、
+                # 予算消化率が不足している場合のみメモリ増設を許可する。
+                if total_price >= int(budget * 0.82):
+                    continue
             current = selected_parts.get(part_type)
             if not current:
                 continue
@@ -3011,6 +3013,13 @@ def _upgrade_parts_with_surplus(selected_parts, total_price, budget, usage, opti
                 better_candidates = _prefer_creator_gpu_with_vram_flex(better_candidates)
                 creator_gpu_cap = _creator_gpu_cap_price(budget, options=options)
                 capped_candidates = [c for c in better_candidates if c.price <= creator_gpu_cap]
+                if capped_candidates:
+                    better_candidates = capped_candidates
+            if part_type == 'gpu' and usage == 'gaming' and build_priority == 'cost':
+                # gaming + cost は spec と同価格帯まで上げ切らない。
+                # 価格差を保ちながら予算未消化だけを抑える。
+                gaming_cost_gpu_cap = int(budget * 0.39)
+                capped_candidates = [c for c in better_candidates if c.price <= gaming_cost_gpu_cap]
                 if capped_candidates:
                     better_candidates = capped_candidates
             if part_type == 'cpu' and usage == 'creator':
