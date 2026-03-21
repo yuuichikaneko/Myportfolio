@@ -4050,6 +4050,11 @@ def _is_premium_gaming_cpu_for_cost_build(part, budget):
     if 'ryzen 9' in text:
         return True
 
+    # Ryzen 7 X3D は gaming+cost の主力帯として許容する。
+    # 9850X3D などを過剰CPU扱いすると、メモリ調整による妥当な昇格まで抑止してしまう。
+    if 'ryzen 7' in text:
+        return False
+
     # gaming + cost は予算帯に応じて CPU 上限を段階制にする。
     # 低予算帯: X3D昇格余地を確保。
     # 中高予算帯: GPU優先を崩さないようCPU過剰投資を抑制。
