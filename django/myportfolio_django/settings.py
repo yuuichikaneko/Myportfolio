@@ -165,6 +165,25 @@ CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'UTC'
 
+# Celery Beat - Scheduled Tasks
+CELERY_BEAT_SCHEDULE = {
+    'run-scraper-daily': {
+        'task': 'scraper.tasks.run_scraper_task',
+        'schedule': 3600.0,  # 毎日05:00 UTC に実行（下記 crontab で指定）
+        'options': {'queue': 'default'},
+    },
+}
+
+# crontab を使用する場合は下記のようにも指定可能
+# from celery.schedules import crontab
+# CELERY_BEAT_SCHEDULE = {
+#     'run-scraper-daily': {
+#         'task': 'scraper.tasks.run_scraper_task',
+#         'schedule': crontab(hour=5, minute=0),  # 毎日05:00 UTC
+#         'options': {'queue': 'default'},
+#     },
+# }
+
 # Cache
 CACHES = {
     'default': {

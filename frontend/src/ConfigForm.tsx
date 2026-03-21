@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   getMarketPriceRange,
   getPartPriceRanges,
@@ -255,6 +255,7 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
   const [caseFanPolicy, setCaseFanPolicy] = useState<"auto" | "silent" | "airflow">("auto");
   const [cpuVendor, setCpuVendor] = useState<"any" | "intel" | "amd">("any");
   const [buildPriority, setBuildPriority] = useState<"cost" | "spec">("cost");
+  const previousBuildPriorityRef = useRef<"cost" | "spec">("cost");
   const [storagePreference, setStoragePreference] = useState<"ssd" | "hdd">("ssd");
   const [mainStorageCapacity, setMainStorageCapacity] = useState<"512" | "1024" | "2048" | "4096">("512");
   const [storagePreference2, setStoragePreference2] = useState<"none" | "nvme_ssd" | "sata_ssd" | "hdd">("none");
@@ -276,6 +277,8 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
   const [popupMessage, setPopupMessage] = useState<string | null>(null);
   const [activeUsageTooltip, setActiveUsageTooltip] = useState<string | null>(null);
   const [activeCoolerTooltip, setActiveCoolerTooltip] = useState<string | null>(null);
+  const budgetMin = 50000;
+  const budgetMax = 1500000;
 
   useEffect(() => {
     const loadMarketRange = async () => {
@@ -339,6 +342,26 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
   }, [usage, marketRange.min]);
 
   useEffect(() => {
+    const prev = previousBuildPriorityRef.current;
+    if (prev === buildPriority) {
+      return;
+    }
+
+    setBudget((current) => {
+      const clampedCurrent = Math.min(budgetMax, Math.max(budgetMin, current));
+      if (prev === "cost" && buildPriority === "spec") {
+        return Math.min(budgetMax, Math.round(clampedCurrent * 1.1));
+      }
+      if (prev === "spec" && buildPriority === "cost") {
+        return Math.max(budgetMin, Math.round(clampedCurrent / 1.1));
+      }
+      return clampedCurrent;
+    });
+
+    previousBuildPriorityRef.current = buildPriority;
+  }, [buildPriority, budgetMax, budgetMin]);
+
+  useEffect(() => {
     if (!popupMessage) {
       return;
     }
@@ -350,13 +373,15 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
     return () => window.clearTimeout(timer);
   }, [popupMessage]);
 
-  const budgetMin = 50000;
-  const budgetMax = 1500000;
+  const getEffectiveBudgetByPriority = (rawBudget: number) => {
+    const clamped = Math.min(budgetMax, Math.max(budgetMin, rawBudget));
+    return clamped;
+  };
 
   const handleSubmit = (event: React.FormEvent) => {
     event.preventDefault();
-    const clamped = Math.min(budgetMax, Math.max(budgetMin, budget));
-    onSubmit(clamped, usage, {
+    const effectiveBudget = getEffectiveBudgetByPriority(budget);
+    onSubmit(effectiveBudget, usage, {
       coolerType,
       radiatorSize,
       coolingProfile,
@@ -382,10 +407,17 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
   const presets = useMemo(() => {
     const min = marketRange.min;
     const sub = 15000;
+    const applyPriorityPremium = (value: number) => {
+      const adjusted = buildPriority === "spec" ? Math.round(value * 1.1) : value;
+      return Math.max(0, Math.min(budgetMax, adjusted));
+    };
+
+    const toPresetValues = (baseValues: number[]) =>
+      baseValues.map((price) => applyPriorityPremium(price - sub));
 
     if (usage === "gaming") {
       const bases = [184980, 274980, 589980, 1309980].map((value) => Math.min(budgetMax, value));
-      const [entry, middle, high, flagship] = bases.map((price) => price - sub);
+      const [entry, middle, high, flagship] = toPresetValues(bases);
       return [
         { label: "ローエンド", value: entry },
         { label: "ミドル", value: middle },
@@ -396,7 +428,7 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
 
     if (usage === "standard") {
       const bases = [89980, 109980, 172980, 249980];
-      const [entry, middle, high, flagship] = bases.map((price) => price - sub);
+      const [entry, middle, high, flagship] = toPresetValues(bases);
       return [
         { label: "ローエンド", value: entry },
         { label: "ミドル", value: middle },
@@ -406,19 +438,23 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
     }
 
     if (usage === "business") {
+      const costBases = [
+        Math.max(0, min - sub),
+        Math.max(0, Math.round((min * 1.3) / 10000) * 10000 - sub),
+        Math.max(0, Math.round((min * 1.7) / 10000) * 10000 - sub),
+        Math.max(0, Math.round((min * 2.2) / 10000) * 10000 - sub),
+      ];
+      const [entry, middle, high, flagship] = costBases.map((value) => applyPriorityPremium(value));
       return [
-        { label: "ローエンド", value: Math.max(0, min - sub) },
-        { label: "ミドル", value: Math.max(0, Math.round((min * 1.3) / 10000) * 10000 - sub) },
-        { label: "ハイエンド", value: Math.max(0, Math.round((min * 1.7) / 10000) * 10000 - sub) },
-        { label: "プレミアム", value: Math.max(0, Math.round((min * 2.2) / 10000) * 10000 - sub) },
+        { label: "ローエンド", value: entry },
+        { label: "ミドル", value: middle },
+        { label: "ハイエンド", value: high },
+        { label: "プレミアム", value: flagship },
       ];
     }
 
-    const creatorBases =
-      buildPriority === "cost"
-        ? [199980, 299980, 449980, 699980]
-        : [349980, 574980, 679980, 979980];
-    const [entry, middle, high, flagship] = creatorBases.map((price) => price - sub);
+    const creatorBases = [199980, 299980, 449980, 699980];
+    const [entry, middle, high, flagship] = toPresetValues(creatorBases);
 
     return [
       { label: "ローエンド", value: entry },
@@ -766,6 +802,7 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
                     </button>
                   ))}
                 </div>
+                <p className="mt-2 text-xs text-slate-500">スペック重視に切り替えると表示予算を10%上乗せします。</p>
               </div>
             </div>
           </section>
