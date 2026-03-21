@@ -40,12 +40,12 @@ for p in parts:
         continue
 
     _, is_created = PCPart.objects.update_or_create(
-        url=p.get("url"),
+        part_type="cpu",
+        name=p.get("name"),
         defaults={
-            "name": p.get("name"),
+            "url": p.get("url"),
             "price": p.get("price"),
             "specs": p.get("specs", {}),
-            "part_type": "cpu",
         },
     )
     if is_created:
