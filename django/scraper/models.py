@@ -1,6 +1,69 @@
 from django.db import models
 from django.utils import timezone
 
+
+class Manufacturer(models.Model):
+    name = models.CharField(max_length=100, unique=True)
+
+    def __str__(self):
+        return self.name
+
+
+class SocketType(models.Model):
+    name = models.CharField(max_length=50, unique=True)
+
+    def __str__(self):
+        return self.name
+
+
+class MemoryType(models.Model):
+    name = models.CharField(max_length=20, unique=True)
+
+    def __str__(self):
+        return self.name
+
+
+class FormFactor(models.Model):
+    name = models.CharField(max_length=30, unique=True)
+
+    def __str__(self):
+        return self.name
+
+
+class InterfaceType(models.Model):
+    name = models.CharField(max_length=30, unique=True)
+
+    def __str__(self):
+        return self.name
+
+
+class EfficiencyGrade(models.Model):
+    name = models.CharField(max_length=20, unique=True)
+
+    def __str__(self):
+        return self.name
+
+
+class OSFamily(models.Model):
+    name = models.CharField(max_length=30, unique=True)
+
+    def __str__(self):
+        return self.name
+
+
+class OSEdition(models.Model):
+    name = models.CharField(max_length=50, unique=True)
+
+    def __str__(self):
+        return self.name
+
+
+class LicenseType(models.Model):
+    name = models.CharField(max_length=30, unique=True)
+
+    def __str__(self):
+        return self.name
+
 class PCPart(models.Model):
     """PC パーツモデル"""
     PART_CHOICES = [
@@ -20,15 +83,209 @@ class PCPart(models.Model):
     price = models.IntegerField()
     specs = models.JSONField(default=dict)
     url = models.URLField()
+    maker = models.CharField(max_length=100, blank=True, db_index=True)
+    manufacturer = models.ForeignKey(Manufacturer, on_delete=models.SET_NULL, null=True, blank=True, related_name='parts')
+    model_code = models.CharField(max_length=120, blank=True, db_index=True)
+    dospara_code = models.CharField(max_length=50, blank=True, null=True, db_index=True)
+    socket = models.CharField(max_length=50, blank=True, db_index=True)
+    memory_type = models.CharField(max_length=20, blank=True, db_index=True)
+    chipset = models.CharField(max_length=50, blank=True, db_index=True)
+    form_factor = models.CharField(max_length=30, blank=True, db_index=True)
+    cores = models.PositiveIntegerField(null=True, blank=True)
+    threads = models.PositiveIntegerField(null=True, blank=True)
+    tdp_w = models.PositiveIntegerField(null=True, blank=True)
+    base_clock_mhz = models.PositiveIntegerField(null=True, blank=True)
+    boost_clock_mhz = models.PositiveIntegerField(null=True, blank=True)
+    vram_gb = models.PositiveIntegerField(null=True, blank=True)
+    vram_type = models.CharField(max_length=20, blank=True)
+    wattage = models.PositiveIntegerField(null=True, blank=True)
+    efficiency_grade = models.CharField(max_length=20, blank=True)
+    capacity_gb = models.PositiveIntegerField(null=True, blank=True, db_index=True)
+    speed_mhz = models.PositiveIntegerField(null=True, blank=True)
+    interface = models.CharField(max_length=30, blank=True, db_index=True)
+    m2_slots = models.PositiveIntegerField(null=True, blank=True)
+    pcie_x16_slots = models.PositiveIntegerField(null=True, blank=True)
+    usb_total = models.PositiveIntegerField(null=True, blank=True)
+    type_c_ports = models.PositiveIntegerField(null=True, blank=True)
+    included_fan_count = models.PositiveIntegerField(null=True, blank=True)
+    supported_fan_count = models.PositiveIntegerField(null=True, blank=True)
+    max_tdp_w = models.PositiveIntegerField(null=True, blank=True)
+    os_family = models.CharField(max_length=30, blank=True)
+    os_edition = models.CharField(max_length=50, blank=True)
+    license_type = models.CharField(max_length=30, blank=True)
+    currency = models.CharField(max_length=3, default='JPY')
+    stock_status = models.CharField(max_length=20, default='unknown')
+    is_active = models.BooleanField(default=True, db_index=True)
+    last_scraped_at = models.DateTimeField(null=True, blank=True)
     scraped_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     
     class Meta:
         unique_together = ('part_type', 'name')
         ordering = ['-updated_at']
+
+    @staticmethod
+    def _to_int(value):
+        if value is None or value == '':
+            return None
+        try:
+            return int(float(value))
+        except (TypeError, ValueError):
+            return None
+
+    def _sync_normalized_fields(self):
+        specs = self.specs if isinstance(self.specs, dict) else {}
+
+        if not self.maker and self.name:
+            self.maker = self.name.split()[0]
+
+        if self.maker and not self.manufacturer:
+            manufacturer, _ = Manufacturer.objects.get_or_create(name=self.maker)
+            self.manufacturer = manufacturer
+
+        self.dospara_code = specs.get('code') or self.dospara_code
+        self.model_code = specs.get('model_code') or self.model_code
+        self.socket = specs.get('socket') or self.socket
+        self.memory_type = specs.get('memory_type') or self.memory_type
+        self.chipset = specs.get('chipset') or self.chipset
+        self.form_factor = specs.get('form_factor') or self.form_factor
+        self.vram_type = specs.get('vram_type') or self.vram_type
+        self.efficiency_grade = specs.get('efficiency_grade') or self.efficiency_grade
+        self.interface = specs.get('interface') or self.interface
+
+        self.cores = self._to_int(specs.get('cores')) if specs.get('cores') is not None else self.cores
+        self.threads = self._to_int(specs.get('threads')) if specs.get('threads') is not None else self.threads
+        self.tdp_w = self._to_int(specs.get('tdp_w')) if specs.get('tdp_w') is not None else self.tdp_w
+        self.base_clock_mhz = self._to_int(specs.get('base_clock_mhz')) if specs.get('base_clock_mhz') is not None else self.base_clock_mhz
+        self.boost_clock_mhz = self._to_int(specs.get('boost_clock_mhz')) if specs.get('boost_clock_mhz') is not None else self.boost_clock_mhz
+        self.vram_gb = self._to_int(specs.get('vram_gb')) if specs.get('vram_gb') is not None else self.vram_gb
+        self.wattage = self._to_int(specs.get('wattage')) if specs.get('wattage') is not None else self.wattage
+        self.capacity_gb = self._to_int(specs.get('capacity_gb')) if specs.get('capacity_gb') is not None else self.capacity_gb
+        self.speed_mhz = self._to_int(specs.get('speed_mhz')) if specs.get('speed_mhz') is not None else self.speed_mhz
+        self.m2_slots = self._to_int(specs.get('m2_slots')) if specs.get('m2_slots') is not None else self.m2_slots
+        self.pcie_x16_slots = self._to_int(specs.get('pcie_x16_slots')) if specs.get('pcie_x16_slots') is not None else self.pcie_x16_slots
+        self.usb_total = self._to_int(specs.get('usb_total')) if specs.get('usb_total') is not None else self.usb_total
+        self.type_c_ports = self._to_int(specs.get('type_c_ports')) if specs.get('type_c_ports') is not None else self.type_c_ports
+        self.included_fan_count = self._to_int(specs.get('included_fan_count')) if specs.get('included_fan_count') is not None else self.included_fan_count
+        self.supported_fan_count = self._to_int(specs.get('supported_fan_count')) if specs.get('supported_fan_count') is not None else self.supported_fan_count
+        self.max_tdp_w = self._to_int(specs.get('max_tdp_w')) if specs.get('max_tdp_w') is not None else self.max_tdp_w
+
+        if self.part_type == 'os' and self.name:
+            lowered = self.name.lower()
+            if 'windows' in lowered and not self.os_family:
+                self.os_family = 'windows'
+            if 'pro' in lowered and not self.os_edition:
+                self.os_edition = 'pro'
+            elif 'home' in lowered and not self.os_edition:
+                self.os_edition = 'home'
+
+    def save(self, *args, **kwargs):
+        self._sync_normalized_fields()
+        super().save(*args, **kwargs)
     
     def __str__(self):
         return f"{self.get_part_type_display()} - {self.name}"
+
+
+class CPUDetail(models.Model):
+    """CPU 詳細(2NF分離)"""
+    part = models.OneToOneField(PCPart, on_delete=models.CASCADE, related_name='cpu_detail')
+    socket = models.CharField(max_length=50, blank=True, db_index=True)
+    memory_type = models.CharField(max_length=20, blank=True, db_index=True)
+    socket_ref = models.ForeignKey(SocketType, on_delete=models.SET_NULL, null=True, blank=True, related_name='cpu_details')
+    memory_type_ref = models.ForeignKey(MemoryType, on_delete=models.SET_NULL, null=True, blank=True, related_name='cpu_details')
+    cores = models.PositiveIntegerField(null=True, blank=True)
+    threads = models.PositiveIntegerField(null=True, blank=True)
+    tdp_w = models.PositiveIntegerField(null=True, blank=True)
+    base_clock_mhz = models.PositiveIntegerField(null=True, blank=True)
+    boost_clock_mhz = models.PositiveIntegerField(null=True, blank=True)
+
+
+class GPUDetail(models.Model):
+    """GPU 詳細(2NF分離)"""
+    part = models.OneToOneField(PCPart, on_delete=models.CASCADE, related_name='gpu_detail')
+    vram_gb = models.PositiveIntegerField(null=True, blank=True)
+    vram_type = models.CharField(max_length=20, blank=True)
+    tdp_w = models.PositiveIntegerField(null=True, blank=True)
+    interface = models.CharField(max_length=30, blank=True, db_index=True)
+    interface_ref = models.ForeignKey(InterfaceType, on_delete=models.SET_NULL, null=True, blank=True, related_name='gpu_details')
+
+
+class MotherboardDetail(models.Model):
+    """Motherboard 詳細(2NF分離)"""
+    part = models.OneToOneField(PCPart, on_delete=models.CASCADE, related_name='motherboard_detail')
+    socket = models.CharField(max_length=50, blank=True, db_index=True)
+    memory_type = models.CharField(max_length=20, blank=True, db_index=True)
+    socket_ref = models.ForeignKey(SocketType, on_delete=models.SET_NULL, null=True, blank=True, related_name='motherboard_details')
+    memory_type_ref = models.ForeignKey(MemoryType, on_delete=models.SET_NULL, null=True, blank=True, related_name='motherboard_details')
+    chipset = models.CharField(max_length=50, blank=True, db_index=True)
+    form_factor = models.CharField(max_length=30, blank=True, db_index=True)
+    form_factor_ref = models.ForeignKey(FormFactor, on_delete=models.SET_NULL, null=True, blank=True, related_name='motherboard_details')
+    m2_slots = models.PositiveIntegerField(null=True, blank=True)
+    pcie_x16_slots = models.PositiveIntegerField(null=True, blank=True)
+    usb_total = models.PositiveIntegerField(null=True, blank=True)
+    type_c_ports = models.PositiveIntegerField(null=True, blank=True)
+
+
+class MemoryDetail(models.Model):
+    """Memory 詳細(2NF分離)"""
+    part = models.OneToOneField(PCPart, on_delete=models.CASCADE, related_name='memory_detail')
+    memory_type = models.CharField(max_length=20, blank=True, db_index=True)
+    memory_type_ref = models.ForeignKey(MemoryType, on_delete=models.SET_NULL, null=True, blank=True, related_name='memory_details')
+    capacity_gb = models.PositiveIntegerField(null=True, blank=True, db_index=True)
+    speed_mhz = models.PositiveIntegerField(null=True, blank=True)
+    form_factor = models.CharField(max_length=30, blank=True, db_index=True)
+    form_factor_ref = models.ForeignKey(FormFactor, on_delete=models.SET_NULL, null=True, blank=True, related_name='memory_details')
+
+
+class StorageDetail(models.Model):
+    """Storage 詳細(2NF分離)"""
+    part = models.OneToOneField(PCPart, on_delete=models.CASCADE, related_name='storage_detail')
+    capacity_gb = models.PositiveIntegerField(null=True, blank=True, db_index=True)
+    interface = models.CharField(max_length=30, blank=True, db_index=True)
+    form_factor = models.CharField(max_length=30, blank=True, db_index=True)
+    interface_ref = models.ForeignKey(InterfaceType, on_delete=models.SET_NULL, null=True, blank=True, related_name='storage_details')
+    form_factor_ref = models.ForeignKey(FormFactor, on_delete=models.SET_NULL, null=True, blank=True, related_name='storage_details')
+
+
+class OSDetail(models.Model):
+    """OS 詳細(2NF分離)"""
+    part = models.OneToOneField(PCPart, on_delete=models.CASCADE, related_name='os_detail')
+    os_family = models.CharField(max_length=30, blank=True)
+    os_edition = models.CharField(max_length=50, blank=True)
+    license_type = models.CharField(max_length=30, blank=True)
+    os_family_ref = models.ForeignKey(OSFamily, on_delete=models.SET_NULL, null=True, blank=True, related_name='os_details')
+    os_edition_ref = models.ForeignKey(OSEdition, on_delete=models.SET_NULL, null=True, blank=True, related_name='os_details')
+    license_type_ref = models.ForeignKey(LicenseType, on_delete=models.SET_NULL, null=True, blank=True, related_name='os_details')
+
+
+class PSUDetail(models.Model):
+    """PSU 詳細(2NF分離)"""
+    part = models.OneToOneField(PCPart, on_delete=models.CASCADE, related_name='psu_detail')
+    wattage = models.PositiveIntegerField(null=True, blank=True)
+    efficiency_grade = models.CharField(max_length=20, blank=True)
+    form_factor = models.CharField(max_length=30, blank=True, db_index=True)
+    efficiency_grade_ref = models.ForeignKey(EfficiencyGrade, on_delete=models.SET_NULL, null=True, blank=True, related_name='psu_details')
+    form_factor_ref = models.ForeignKey(FormFactor, on_delete=models.SET_NULL, null=True, blank=True, related_name='psu_details')
+
+
+class CaseDetail(models.Model):
+    """Case 詳細(2NF分離)"""
+    part = models.OneToOneField(PCPart, on_delete=models.CASCADE, related_name='case_detail')
+    form_factor = models.CharField(max_length=30, blank=True, db_index=True)
+    form_factor_ref = models.ForeignKey(FormFactor, on_delete=models.SET_NULL, null=True, blank=True, related_name='case_details')
+    included_fan_count = models.PositiveIntegerField(null=True, blank=True)
+    supported_fan_count = models.PositiveIntegerField(null=True, blank=True)
+
+
+class CPUCoolerDetail(models.Model):
+    """CPU Cooler 詳細(2NF分離)"""
+    part = models.OneToOneField(PCPart, on_delete=models.CASCADE, related_name='cpu_cooler_detail')
+    socket = models.CharField(max_length=50, blank=True, db_index=True)
+    socket_ref = models.ForeignKey(SocketType, on_delete=models.SET_NULL, null=True, blank=True, related_name='cpu_cooler_details')
+    max_tdp_w = models.PositiveIntegerField(null=True, blank=True)
+    form_factor = models.CharField(max_length=30, blank=True, db_index=True)
+    form_factor_ref = models.ForeignKey(FormFactor, on_delete=models.SET_NULL, null=True, blank=True, related_name='cpu_cooler_details')
 
 
 class Configuration(models.Model):
