@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import App from "./App";
@@ -140,8 +140,9 @@ describe("App history panel", () => {
     await screen.findByRole("button", { name: "保存履歴 2" });
     await userEvent.click(screen.getByRole("button", { name: "保存履歴 2" }));
 
-    const deleteButtons = screen.getAllByRole("button", { name: "削除" });
-    await userEvent.click(deleteButtons[0]);
+    const gamingCard = screen.getByText("Gaming").closest("div.w-full.text-left.border");
+    expect(gamingCard).toBeTruthy();
+    await userEvent.click(within(gamingCard as HTMLElement).getByRole("button", { name: "削除" }));
 
     expect(screen.getByText("構成を削除しますか？")).toBeInTheDocument();
 

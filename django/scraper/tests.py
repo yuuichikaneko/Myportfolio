@@ -2714,6 +2714,92 @@ class ScraperApiTests(APITestCase):
 		self.assertIn('X3D', parts['cpu']['name'])
 		self.assertIn('5600X3D', parts['cpu']['name'])
 
+	def test_generate_config_gaming_cost_upgrades_non_x3d_when_budget_has_surplus(self):
+		"""gaming+cost で予算余剰がある場合、非X3DからX3Dへ昇格できることを確認"""
+		PCPart.objects.create(
+			part_type='cpu',
+			name='AMD Ryzen 5 3400G BOX Surplus Case',
+			price=10500,
+			specs={'socket': 'AM4'},
+			url='https://example.com/cpu-3400g-surplus',
+		)
+		PCPart.objects.create(
+			part_type='cpu',
+			name='AMD Ryzen 7 9800X3D BOX Surplus Case',
+			price=64799,
+			specs={'socket': 'AM4'},
+			url='https://example.com/cpu-9800x3d-surplus',
+		)
+		PCPart.objects.create(
+			part_type='gpu',
+			name='RTX 4060 Surplus Case',
+			price=48000,
+			specs={'vram': '8GB'},
+			url='https://example.com/gpu-4060-surplus',
+		)
+		PCPart.objects.create(
+			part_type='motherboard',
+			name='B550 DDR4 Board Surplus Case',
+			price=12000,
+			specs={'socket': 'AM4', 'memory_type': 'DDR4', 'form_factor': 'ATX'},
+			url='https://example.com/mb-b550-surplus',
+		)
+		PCPart.objects.create(
+			part_type='memory',
+			name='DDR4 16GB Affordable Surplus Case',
+			price=9800,
+			specs={'memory_type': 'DDR4', 'capacity_gb': 16},
+			url='https://example.com/mem-ddr4-surplus',
+		)
+		PCPart.objects.create(
+			part_type='storage',
+			name='NVMe 1TB Surplus Case',
+			price=12000,
+			specs={'interface': 'NVMe', 'capacity_gb': 1000},
+			url='https://example.com/storage-1tb-surplus',
+		)
+		PCPart.objects.create(
+			part_type='psu',
+			name='500W PSU Surplus Case',
+			price=5546,
+			specs={'wattage': 500},
+			url='https://example.com/psu-500w-surplus',
+		)
+		PCPart.objects.create(
+			part_type='case',
+			name='ATX Case Surplus Case',
+			price=7380,
+			specs={'supported_form_factors': ['ATX']},
+			url='https://example.com/case-atx-surplus',
+		)
+		PCPart.objects.create(
+			part_type='cpu_cooler',
+			name='Air Cooler Surplus Case',
+			price=3218,
+			specs={},
+			url='https://example.com/cooler-air-surplus',
+		)
+
+		response = self.client.post(
+			'/api/configurations/generate/',
+			{
+				'budget': 169980,
+				'usage': 'gaming',
+				'build_priority': 'cost',
+				'cooler_type': 'air',
+				'radiator_size': '240',
+				'cooling_profile': 'performance',
+				'case_size': 'mid',
+				'cpu_vendor': 'any',
+			},
+			format='json',
+		)
+
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+		parts = {p['category']: p for p in response.data['parts']}
+		self.assertIn('9800X3D', parts['cpu']['name'])
+		self.assertLessEqual(response.data['total_price'], 169980)
+
 
 class DosparaScraperTests(APITestCase):
 	class _DummyResponse:
