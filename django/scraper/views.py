@@ -231,6 +231,7 @@ GAMING_SPEC_GPU_KEYWORDS = (
 
 GAMING_CPU_X3D_PATTERN = re.compile(r'\b(?:ryzen\s*[3579]\s*)?\d{4,5}x3d\b', re.IGNORECASE)
 UNSTABLE_INTEL_CORE_I_PATTERN = re.compile(r'\bcore\s*i[3579]?[-\s]?(?:13|14)\d{3,4}[a-z]{0,3}\b', re.IGNORECASE)
+PLACEHOLDER_URL_HINTS = ('example.com',)
 
 RADIATOR_SIZE_VALUES = (120, 140, 240, 280, 360, 420)
 
@@ -258,6 +259,11 @@ def _is_part_suitable(part_type, part):
             return False
 
     url = (part.url or '').lower()
+    if any(hint in url for hint in PLACEHOLDER_URL_HINTS):
+        # テストデータでは example.com を使うため、実URL候補が存在する場合のみ除外する。
+        has_real_url_candidate = PCPart.objects.filter(part_type=part_type).exclude(url__icontains='example.com').exists()
+        if has_real_url_candidate:
+            return False
     for hint in UNSUITABLE_URL_HINTS.get(part_type, []):
         if hint in url:
             return False
@@ -1449,6 +1455,40 @@ def _infer_motherboard_chipset(part):
     return 'unknown'
 
 
+def _infer_motherboard_socket(part):
+    """マザーボードのCPUソケットを推定する: AM4 / AM5 / LGA1700 / LGA1851 / ''"""
+    socket_raw = str(_get_spec(part, 'socket', '') or '').upper().replace(' ', '')
+    if socket_raw in {'AM4', 'AM5', 'LGA1700', 'LGA1851'}:
+        return socket_raw
+
+    text = f"{getattr(part, 'name', '')} {getattr(part, 'url', '')}".upper().replace(' ', '')
+    if 'AM5' in text:
+        return 'AM5'
+    if 'AM4' in text:
+        return 'AM4'
+    if 'LGA1851' in text or '1851' in text:
+        return 'LGA1851'
+    if 'LGA1700' in text or '1700' in text:
+        return 'LGA1700'
+
+    chipset = _infer_motherboard_chipset(part)
+    if chipset in {'x870e', 'x870', 'x670e', 'x670'}:
+        return 'AM5'
+
+    if re.search(r'\b(?:B850|B650|B550|A620|A520|X670|X870|X570|B450|A320)\b', text):
+        # B650/B850/X670/X870 はAM5、B550/A520/X570/B450/A320 はAM4系
+        if re.search(r'\b(?:B650|B850|A620|X670|X870)\b', text):
+            return 'AM5'
+        return 'AM4'
+
+    if re.search(r'\b(?:H610|H670|B660|B760|Z690|Z790|Q670|W680)\b', text):
+        return 'LGA1700'
+    if re.search(r'\b(?:H810|B860|Z890|W880)\b', text):
+        return 'LGA1851'
+
+    return ''
+
+
 def _prefer_motherboard_candidates(candidates, case_size):
     preferred_form_factors = _preferred_motherboard_form_factors(case_size)
     if not preferred_form_factors:
@@ -1718,7 +1758,7 @@ def _pick_part_by_target(part_type, budget, usage, weights_override=None, option
     elif part_type == 'motherboard':
         cpu_socket = options.get('cpu_socket')
         if cpu_socket:
-            socket_filtered = [p for p in candidates if _get_spec(p, 'socket') == cpu_socket]
+            socket_filtered = [p for p in candidates if _infer_motherboard_socket(p) == cpu_socket]
             if socket_filtered:
                 candidates = socket_filtered
         max_chipset = options.get('max_motherboard_chipset', 'any')
@@ -1766,6 +1806,13 @@ def _pick_part_by_target(part_type, budget, usage, weights_override=None, option
             ssd_filtered = [p for p in candidates if _infer_storage_media_type(p) == 'ssd']
             if ssd_filtered:
                 candidates = ssd_filtered
+        if usage == 'gaming' and build_priority == 'cost':
+            # gaming + cost では、ストレージ単体の過剰比率を抑えて
+            # CPU/GPU予算を圧迫しないようにする。
+            storage_price_cap = max(18000, int(budget * 0.22))
+            capped_candidates = [p for p in candidates if p.price <= storage_price_cap]
+            if capped_candidates:
+                candidates = capped_candidates
     elif part_type == 'psu':
         if required_psu_wattage is not None:
             psu_filtered = [
@@ -2484,7 +2531,7 @@ def _compatibility_issues(selected_parts, usage, options=None):
     radiator_size = options.get('radiator_size', 'any')
 
     cpu_socket = _get_spec(cpu, 'socket')
-    mb_socket = _get_spec(motherboard, 'socket')
+    mb_socket = _infer_motherboard_socket(motherboard)
     if cpu and motherboard and cpu_socket and mb_socket and cpu_socket != mb_socket:
         issues.append('socket_mismatch')
 
@@ -2572,7 +2619,7 @@ def _matches_selection_options(part_type, part, options=None):
     if part_type == 'motherboard':
         cpu_socket = options.get('cpu_socket')
         if cpu_socket:
-            mb_socket = _get_spec(part, 'socket')
+            mb_socket = _infer_motherboard_socket(part)
             if mb_socket and mb_socket != cpu_socket:
                 return False
         max_chipset = options.get('max_motherboard_chipset', 'any')
@@ -2588,7 +2635,7 @@ def _matches_selection_options(part_type, part, options=None):
             available_candidates = [
                 candidate for candidate in PCPart.objects.filter(part_type='motherboard')
                 if _is_part_suitable('motherboard', candidate)
-                and (not cpu_socket or _get_spec(candidate, 'socket') == cpu_socket)
+                and (not cpu_socket or _infer_motherboard_socket(candidate) == cpu_socket)
                 and _infer_motherboard_form_factor(candidate) in preferred_form_factors
             ]
             if available_candidates and _infer_motherboard_form_factor(part) not in preferred_form_factors:
@@ -2646,12 +2693,12 @@ def _resolve_compatibility(selected_parts, usage, options=None):
 
         if issue == 'socket_mismatch':
             cpu_socket = _get_spec(cpu, 'socket')
-            mb_socket = _get_spec(motherboard, 'socket')
+            mb_socket = _infer_motherboard_socket(motherboard)
             replaced = False
             if cpu_socket:
                 motherboard_candidates = [
                     candidate for candidate in PCPart.objects.filter(part_type='motherboard').order_by('price')
-                    if _is_part_suitable('motherboard', candidate) and _get_spec(candidate, 'socket') == cpu_socket
+                    if _is_part_suitable('motherboard', candidate) and _infer_motherboard_socket(candidate) == cpu_socket
                 ]
                 motherboard_candidates = _prefer_motherboard_candidates(motherboard_candidates, case_size)
                 new_mb = motherboard_candidates[0] if motherboard_candidates else None
@@ -2681,7 +2728,7 @@ def _resolve_compatibility(selected_parts, usage, options=None):
                 def _mb_fits_mem(p, _mem_type=mem_type, _cpu_socket=cpu_socket):
                     if _infer_motherboard_memory_type(p) != _mem_type:
                         return False
-                    p_socket = _get_spec(p, 'socket')
+                    p_socket = _infer_motherboard_socket(p)
                     if _cpu_socket and p_socket and p_socket != _cpu_socket:
                         return False
                     return True
@@ -3096,7 +3143,7 @@ def _rebalance_gaming_spec_gpu_memory(selected_parts, budget, usage, options=Non
     if cpu:
         cpu_socket = _get_spec(cpu, 'socket')
         if cpu_socket:
-            socket_filtered = [p for p in motherboard_candidates if _get_spec(p, 'socket') == cpu_socket]
+            socket_filtered = [p for p in motherboard_candidates if _infer_motherboard_socket(p) == cpu_socket]
             if socket_filtered:
                 motherboard_candidates = socket_filtered
 
@@ -3378,7 +3425,7 @@ def _rightsize_motherboard_for_gaming_spec(selected_parts, budget, usage, option
     ]
 
     if cpu_socket:
-        socket_filtered = [p for p in candidates if _get_spec(p, 'socket') == cpu_socket]
+        socket_filtered = [p for p in candidates if _infer_motherboard_socket(p) == cpu_socket]
         if socket_filtered:
             candidates = socket_filtered
 
@@ -3974,7 +4021,15 @@ def _is_premium_gaming_cpu_for_cost_build(part, budget):
     if 'ryzen 9' in text:
         return True
 
-    return part.price >= max(90000, int(budget * 0.16))
+    # gaming + cost は予算帯に応じて CPU 上限を段階制にする。
+    # 低予算帯: X3D昇格余地を確保。
+    # 中高予算帯: GPU優先を崩さないようCPU過剰投資を抑制。
+    if int(budget) <= 200000:
+        premium_floor = max(75000, int(budget * 0.30))
+    else:
+        premium_floor = max(60000, int(budget * 0.14))
+
+    return part.price >= premium_floor
 
 
 def _rebalance_gaming_cost_cpu_to_storage(selected_parts, budget, usage, options=None):
@@ -4114,11 +4169,11 @@ def _prefer_higher_gaming_cost_x3d_cpu(selected_parts, budget, usage, options=No
             and not _is_premium_gaming_cpu_for_cost_build(part, budget)
         ]
     else:
-        # 非 X3D: 予算内の任意の X3D CPU を探す（できれば高めの価格帯）
-        max_cpu_price = int(budget * 0.22)  # CPU 予算の 18% に余裕を持たせる
+        # 非 X3D: 予算比率の固定上限ではなく、後段の合計金額判定で可否を判断する。
+        # これにより、全体予算に余剰があるケースで X3D 候補を取りこぼさない。
         upgrade_candidates = [
             part
-            for part in PCPart.objects.filter(part_type='cpu', price__gt=current_cpu.price, price__lte=max_cpu_price).order_by('-price')
+            for part in PCPart.objects.filter(part_type='cpu', price__gt=current_cpu.price).order_by('-price')
             if _is_part_suitable('cpu', part)
             and _matches_selection_options('cpu', part, options=options)
             and _is_gaming_cpu_x3d_preferred(part)
