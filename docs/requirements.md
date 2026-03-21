@@ -62,6 +62,8 @@
 
 ## 4. 非機能要件
 
+詳細定義は [non_functional_requirements.md](non_functional_requirements.md) を参照。
+
 ### 4.1 パフォーマンス
 - 構成生成APIの応答時間は3秒以内を目標とする（通常負荷時）。
 
