@@ -75,8 +75,8 @@ USAGE_BUDGET_WEIGHTS = {
 CREATOR_FLAGSHIP_BUDGET_THRESHOLD = 900000
 CREATOR_FLAGSHIP_GPU_BUDGET_CAP = 0.75
 CREATOR_GPU_BUDGET_CAP_BY_PRIORITY = {
-    'cost': 0.12,
-    'spec': 0.16,
+    'cost': 0.55,    # Radeon R9700 (259,800) を包含
+    'spec': 0.75,    # NVIDIA RTX PRO 4500 (506,000) を包含
     'balanced': 0.14,
 }
 CREATOR_MOTHERBOARD_FLOOR_BY_PRIORITY = {
@@ -984,10 +984,13 @@ def _creator_gpu_tier(part):
     text = f"{getattr(part, 'name', '')} {getattr(part, 'url', '')}".lower()
     memory_gb = _infer_gpu_memory_gb(part)
 
-    if any(keyword in text for keyword in ('rtx 5090', 'rtx 5080', 'rtx 5070 ti', 'rtx 4090', 'rtx 4080')):
+    # Tier 3: Flagship professional/gaming cards
+    if any(keyword in text for keyword in ('rtx 5090', 'rtx 5080', 'rtx 5070 ti', 'rtx 4090', 'rtx 4080', 'rtx pro 6000', 'rtx pro 5880')):
         return 3
-    if any(keyword in text for keyword in ('rtx 5070', 'rtx 5060 ti', 'rtx 4070', 'rtx 4060 ti')):
+    # Tier 2: Mid-range professional/gaming cards (including Radeon R9700, RTX PRO 4500)
+    if any(keyword in text for keyword in ('rtx 5070', 'rtx 5060 ti', 'rtx 4070', 'rtx 4060 ti', 'radeon ai pro r9700', 'rtx pro 4500')):
         return 2
+    # Tier 1: Entry professional/gaming cards
     if any(keyword in text for keyword in ('rtx 5060', 'rtx 4060', 'rtx 3060')):
         return 1
     if 'rtx 3050' in text and memory_gb >= 6:
@@ -1835,8 +1838,25 @@ def _pick_part_by_target(part_type, budget, usage, weights_override=None, option
         candidates = _prefer_rx_xt_value_candidates(candidates)
 
     if part_type == 'gpu' and usage == 'creator':
-        # クリエイター用途は NVIDIA 優先。ただし同等以上VRAMのAMDは許容。
-        candidates = _prefer_creator_gpu_with_vram_flex(candidates)
+        # build_priority による GPU 優先度別選定
+        if build_priority == 'cost':
+            # コスト重視: Radeon AI PRO R9700 を優先
+            radeon_r9700 = [p for p in candidates if 'Radeon' in p.name and 'R9700' in p.name]
+            if radeon_r9700:
+                # R9700 の最安価格を選定
+                return sorted(radeon_r9700, key=lambda p: p.price)[0]
+        elif build_priority == 'spec':
+            # スペック重視: NVIDIA RTX PRO 4500 を優先
+            nvidia_pro_4500 = [p for p in candidates if 'RTX PRO 4500' in p.name]
+            if nvidia_pro_4500:
+                # RTX PRO 4500 の最安価格を選定
+                return sorted(nvidia_pro_4500, key=lambda p: p.price)[0]
+            else:
+                # RTX PRO 4500がない場合は NVIDIA 優先に fallback
+                candidates = _prefer_creator_gpu_with_vram_flex(candidates)
+        else:
+            # balanced: NVIDIA 優先。ただし同等以上VRAMのAMDは許容。
+            candidates = _prefer_creator_gpu_with_vram_flex(candidates)
 
         creator_gpu_cap = _creator_gpu_cap_price(budget, options=options)
         capped_candidates = [p for p in candidates if p.price <= creator_gpu_cap]
@@ -4403,6 +4423,11 @@ def build_configuration_response(
             selected_parts[part_type] = part
             total_price += part.price
 
+    # creator + (cost or spec): GPU選定を固定化し、後続処理で変更されないようにする
+    creator_gpu_fixed = None
+    if usage == 'creator' and selection_options.get('build_priority') in ('cost', 'spec'):
+        creator_gpu_fixed = selected_parts.get('gpu')
+
     # CPUソケット情報をoptions に付与して、互換チェック・ダウングレード時に引き継ぐ
     cpu_part = selected_parts.get('cpu')
     if cpu_part:
@@ -4750,6 +4775,23 @@ def build_configuration_response(
         selected.insert(cpu_index + 1, igpu_entry)
 
     estimated_power = _estimate_system_power_w({**selected_parts, **extra_storage_parts}, usage)
+
+    # creator + (cost or spec): GPU選定を復元
+    if creator_gpu_fixed:
+        selected_parts['gpu'] = creator_gpu_fixed
+        # selected リスト内の GPU も更新
+        gpu_index = next((i for i, p in enumerate(selected) if p['category'] == 'gpu'), -1)
+        if gpu_index >= 0:
+            gpu_part = creator_gpu_fixed
+            selected[gpu_index] = {
+                'category': 'gpu',
+                'name': gpu_part.name,
+                'price': gpu_part.price,
+                'url': gpu_part.url,
+                'specs': gpu_part.specs,
+            }
+        # total_price の再計算
+        total_price = _sum_selected_price(selected_parts)
 
     configuration = Configuration.objects.create(
         budget=budget,
