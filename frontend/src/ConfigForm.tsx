@@ -373,17 +373,14 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
     return () => window.clearTimeout(timer);
   }, [popupMessage]);
 
-  const getEffectiveBudgetByPriority = (rawBudget: number, priority: "cost" | "spec") => {
+  const getEffectiveBudgetByPriority = (rawBudget: number) => {
     const clamped = Math.min(budgetMax, Math.max(budgetMin, rawBudget));
-    if (priority !== "spec") {
-      return clamped;
-    }
-    return Math.min(budgetMax, Math.round(clamped * 1.1));
+    return clamped;
   };
 
   const handleSubmit = (event: React.FormEvent) => {
     event.preventDefault();
-    const effectiveBudget = getEffectiveBudgetByPriority(budget, buildPriority);
+    const effectiveBudget = getEffectiveBudgetByPriority(budget);
     onSubmit(effectiveBudget, usage, {
       coolerType,
       radiatorSize,
@@ -805,7 +802,7 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
                     </button>
                   ))}
                 </div>
-                <p className="mt-2 text-xs text-slate-500">スペック重視では送信予算に自動で10%上乗せします。</p>
+                <p className="mt-2 text-xs text-slate-500">スペック重視に切り替えると表示予算を10%上乗せします。</p>
               </div>
             </div>
           </section>
