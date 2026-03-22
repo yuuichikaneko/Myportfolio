@@ -31,7 +31,7 @@ describe("api client", () => {
     const result = await getScraperStatus();
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:8001/api/scraper-status/summary/",
+      "http://127.0.0.1:8002/api/scraper-status/summary/",
       undefined
     );
     expect(result.total_parts_in_db).toBe(1);
@@ -81,7 +81,7 @@ describe("api client", () => {
     await deleteSavedConfiguration(7);
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:8001/api/configurations/7/",
+      "http://127.0.0.1:8002/api/configurations/7/",
       { method: "DELETE" }
     );
   });
@@ -149,7 +149,7 @@ describe("api client", () => {
     const result = await getStorageInventory();
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:8001/api/storage-inventory/",
+      "http://127.0.0.1:8002/api/storage-inventory/",
       undefined
     );
     expect(result.total_count).toBe(2);

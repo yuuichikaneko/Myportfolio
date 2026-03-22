@@ -62,8 +62,17 @@ if exist "%PYTHON_EXE%" (
 
 timeout /t 2 /nobreak >nul
 
+echo [1.5] Starting Flask API bridge on port 8002...
+if exist "%PYTHON_EXE%" (
+	start "Flask API - Port 8002" cmd /k "cd %~dp0 && %PYTHON_EXE% -m flask_service.run_flask"
+) else (
+	start "Flask API - Port 8002" cmd /k "cd %~dp0 && py -m flask_service.run_flask"
+)
+
+timeout /t 1 /nobreak >nul
+
 echo [2] Starting Frontend on port %FRONTEND_PORT%...
-start "Frontend - Port %FRONTEND_PORT%" cmd /k "cd frontend && npm run dev -- --host 127.0.0.1 --port %FRONTEND_PORT%"
+start "Frontend - Port %FRONTEND_PORT%" cmd /k "cd frontend && set VITE_API_URL=http://127.0.0.1:8002/api && npm run dev -- --host 127.0.0.1 --port %FRONTEND_PORT%"
 
 if "%REDIS_READY%"=="1" (
 	timeout /t 1 /nobreak >nul
@@ -93,6 +102,7 @@ echo ============================================================
 echo Services Started
 echo ============================================================
 echo Django:   http://127.0.0.1:8001
+echo Flask:    http://127.0.0.1:8002
 echo Frontend: http://127.0.0.1:%FRONTEND_PORT%
 echo Worker:   Celery Worker (auto scraper)
 echo Beat:     Celery Beat (scheduler)
