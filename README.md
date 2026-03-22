@@ -34,6 +34,14 @@ Windows helper scripts:
 - `start_django_frontend.bat`
 - `start_django_frontend.ps1`
 
+`start_django_frontend.bat` / `start_django_frontend.ps1` launches all of the following:
+- Django server (8001)
+- Frontend dev server (auto-selected port)
+- Celery Worker (auto scraper)
+- Celery Beat (scheduler)
+
+If Redis is not running on `127.0.0.1:6379`, the scripts try to start `redis-server` when available.
+
 ### Frontend (React via Vite)
 ```bash
 cd frontend

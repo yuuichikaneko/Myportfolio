@@ -1,5 +1,27 @@
 Set-Location "$PSScriptRoot"
 
+function Test-TcpPort {
+	param(
+		[string]$TargetHost = "127.0.0.1",
+		[int]$Port
+	)
+
+	$client = $null
+	try {
+		$client = [System.Net.Sockets.TcpClient]::new()
+		$client.Connect($TargetHost, $Port)
+		return $true
+	}
+	catch {
+		return $false
+	}
+	finally {
+		if ($client) {
+			$client.Dispose()
+		}
+	}
+}
+
 function Get-FreePort {
 	param(
 		[int]$StartPort = 5173,
@@ -34,6 +56,32 @@ if (-not (Test-Path $python)) {
 	$python = "py"
 }
 
+if (-not (Test-TcpPort -Port 6379)) {
+	$redisCommand = Get-Command redis-server -ErrorAction SilentlyContinue
+	if ($redisCommand) {
+		Write-Output "[0] Redis not detected on 127.0.0.1:6379. Starting redis-server..."
+		Start-Process powershell -ArgumentList '-NoExit', '-Command', "redis-server"
+		Start-Sleep -Seconds 2
+	}
+	else {
+		Write-Warning "Redis is not running on 127.0.0.1:6379. Auto scraper may not work until Redis starts."
+	}
+}
+
+$redisReady = Test-TcpPort -Port 6379
+if (-not $redisReady) {
+	Write-Warning "Redis is still unavailable on 127.0.0.1:6379. Celery Worker/Beat startup will be skipped."
+}
+
+Write-Output "[0.5] Applying Django migrations..."
+Push-Location "$PSScriptRoot/django"
+& $python manage.py migrate
+$migrateExitCode = $LASTEXITCODE
+Pop-Location
+if ($migrateExitCode -ne 0) {
+	Write-Warning "Django migrations failed (exit code: $migrateExitCode). Continuing startup, but app behavior may be unstable."
+}
+
 Write-Output "[1] Starting Django on port 8001..."
 Start-Process powershell -ArgumentList '-NoExit', '-Command', "cd '$PSScriptRoot/django'; & '$python' manage.py runserver 8001"
 
@@ -43,9 +91,27 @@ $frontendPort = Get-FreePort
 Write-Output "[2] Starting Frontend on port $frontendPort..."
 Start-Process powershell -ArgumentList '-NoExit', '-Command', "cd '$PSScriptRoot/frontend'; npm run dev -- --host 127.0.0.1 --port $frontendPort"
 
+Start-Sleep -Seconds 1
+
+if ($redisReady) {
+	Write-Output "[3] Starting Celery Worker (Auto Scraper)..."
+	Start-Process powershell -ArgumentList '-NoExit', '-Command', "cd '$PSScriptRoot/django'; & '$python' -m celery -A myportfolio_django worker -l info -P solo"
+
+	Start-Sleep -Seconds 1
+
+	Write-Output "[4] Starting Celery Beat (Auto Scraper Scheduler)..."
+	Start-Process powershell -ArgumentList '-NoExit', '-Command', "cd '$PSScriptRoot/django'; & '$python' -m celery -A myportfolio_django beat -l info"
+}
+else {
+	Write-Output "[3] Skipped Celery Worker startup (Redis unavailable)."
+	Write-Output "[4] Skipped Celery Beat startup (Redis unavailable)."
+}
+
 Write-Output ""
 Write-Output "============================================================"
 Write-Output "Services Started"
 Write-Output "============================================================"
 Write-Output "Django:   http://127.0.0.1:8001"
 Write-Output "Frontend: http://127.0.0.1:$frontendPort"
+Write-Output "Worker:   Celery Worker (auto scraper)"
+Write-Output "Beat:     Celery Beat (scheduler)"
