@@ -1,4 +1,4 @@
-const API_BASE_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8001/api";
+const API_BASE_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8002/api";
 
 export interface CustomBudgetWeights {
   cpu: number;
@@ -17,7 +17,7 @@ async function safeFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     return await fetch(input, init);
   } catch {
     throw new Error(
-      `API server is unreachable: ${API_BASE_URL}. Start Django first (python django/manage.py runserver 8001).`
+      `API server is unreachable: ${API_BASE_URL}. Start Flask bridge first (python -m flask_service.run_flask).`
     );
   }
 }
