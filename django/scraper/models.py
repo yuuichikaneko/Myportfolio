@@ -342,3 +342,49 @@ class ScraperStatus(models.Model):
     
     def __str__(self):
         return f"Scraper Status (Last: {self.last_run})"
+
+
+class GPUPerformanceSnapshot(models.Model):
+    """GPU性能比較ソースの取り込みスナップショット。"""
+    source_name = models.CharField(max_length=80, db_index=True)
+    source_url = models.URLField()
+    updated_at_source = models.CharField(max_length=40, blank=True)
+    score_note = models.CharField(max_length=200, blank=True)
+    parser_version = models.CharField(max_length=30, default='v1')
+    fetched_at = models.DateTimeField(default=timezone.now, db_index=True)
+
+    class Meta:
+        ordering = ['-fetched_at']
+
+    def __str__(self):
+        return f"{self.source_name} @ {self.fetched_at:%Y-%m-%d %H:%M:%S}"
+
+
+class GPUPerformanceEntry(models.Model):
+    """GPU性能比較の正規化エントリ。"""
+    VENDOR_CHOICES = [
+        ('nvidia', 'NVIDIA'),
+        ('amd', 'AMD'),
+        ('intel', 'Intel'),
+        ('igpu', 'iGPU'),
+        ('unknown', 'Unknown'),
+    ]
+
+    snapshot = models.ForeignKey(GPUPerformanceSnapshot, on_delete=models.CASCADE, related_name='entries')
+    gpu_name = models.CharField(max_length=120)
+    model_key = models.CharField(max_length=80, db_index=True)
+    vendor = models.CharField(max_length=20, choices=VENDOR_CHOICES, default='unknown', db_index=True)
+    vram_gb = models.PositiveIntegerField(null=True, blank=True, db_index=True)
+    perf_score = models.PositiveIntegerField()
+    detail_url = models.URLField(blank=True)
+    is_laptop = models.BooleanField(default=False, db_index=True)
+    rank_global = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-perf_score', 'gpu_name']
+        unique_together = ('snapshot', 'model_key', 'vram_gb', 'is_laptop')
+
+    def __str__(self):
+        suffix = f" {self.vram_gb}GB" if self.vram_gb else ""
+        return f"{self.model_key}{suffix} ({self.perf_score})"
