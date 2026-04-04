@@ -225,7 +225,13 @@ MARKET_BRAND_URLS = {
     "thirdwave_business": "https://www.dospara.co.jp/business",
 }
 
+DOSPARA_GPU_PERFORMANCE_URL = "https://www.dospara.co.jp/5shopping/shp_vga_def_parts.html"
+GPU_PERF_SCORE_NOTE = "Dospara独自の参考値（定期見直しあり）"
+DOSPARA_AMD_CPU_PERFORMANCE_URL = "https://www.dospara.co.jp/5info/cts_lp_amd_cpu.html"
+DOSPARA_INTEL_CPU_PERFORMANCE_URL = "https://www.dospara.co.jp/5info/cts_lp_intel_cpu.html"
+
 PRICE_IN_HTML_PATTERN = re.compile(r"([1-9][0-9]{1,2},[0-9]{3})")
+INTEL_13_14_GEN_PATTERN = re.compile(r"\bCORE\s+I[3579]\s*[- ]?\s*1[34]\d{3}[A-Z]*\b", re.IGNORECASE)
 
 
 def _normalize_price(price_text: str) -> Optional[int]:
@@ -291,6 +297,221 @@ def fetch_dospara_market_price_range(timeout: int = 15, session: Optional[reques
         "default": suggested_default,
         "currency": "JPY",
         "sources": per_brand,
+    }
+
+
+def _parse_gpu_vram_gb(value: str) -> Optional[int]:
+    text = (value or "").strip().lower()
+    if not text or text in {"-", "--", "計測中"}:
+        return None
+    match = re.search(r"(\d+(?:\.\d+)?)\s*gb", text)
+    if not match:
+        return None
+    return int(float(match.group(1)))
+
+
+def _extract_gpu_model_key(name: str) -> Optional[str]:
+    text = re.sub(r"\s+", " ", (name or "").upper()).strip()
+    text = re.sub(r"^NEW\s+", "", text)
+
+    patterns = [
+        r"RTX\s*\d{4}\s*TI\s*SUPER",
+        r"RTX\s*\d{4}\s*SUPER",
+        r"RTX\s*\d{4}\s*TI",
+        r"RTX\s*\d{4}",
+        r"GTX\s*\d{3,4}\s*TI",
+        r"GTX\s*\d{3,4}",
+        r"GT\s*\d{3,4}",
+        r"RX\s*\d{4}\s*XTX",
+        r"RX\s*\d{4}\s*XT",
+        r"RX\s*\d{4}\s*GRE",
+        r"RX\s*\d{4}",
+        r"INTEL\s+ARC\s+[AB]\d{3,4}",
+        r"ARC\s+[AB]\d{3,4}",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if match:
+            return re.sub(r"\s+", " ", match.group(0)).strip()
+    return None
+
+
+def _infer_gpu_vendor(name: str) -> str:
+    text = (name or "").lower()
+    if "rtx" in text or "gtx" in text or re.search(r"\bgt\s*\d{3,4}\b", text):
+        return "nvidia"
+    if "radeon" in text or "rx " in text or re.search(r"\brx\d{4}", text):
+        return "amd"
+    if "arc" in text:
+        return "intel"
+    if "uhd" in text or "iris" in text or "vega" in text or "780m" in text:
+        return "igpu"
+    return "unknown"
+
+
+def fetch_dospara_gpu_performance_table(timeout: int = 20, session: Optional[requests.Session] = None) -> Dict:
+    """Fetch GPU performance rows from Dospara comparison page for specs-level enrichment."""
+    client = session or requests.Session()
+    response = client.get(DOSPARA_GPU_PERFORMANCE_URL, headers=DEFAULT_HEADERS, timeout=timeout)
+    response.raise_for_status()
+
+    soup = BeautifulSoup(response.text, "html.parser")
+    title_text = soup.get_text(" ", strip=True)
+    updated_match = re.search(r"更新日[：:]?\s*(\d{4}年\d{1,2}月\d{1,2}日)", title_text)
+    updated_at_source = updated_match.group(1) if updated_match else None
+
+    entries: List[Dict] = []
+    seen = set()
+
+    for table in soup.find_all("table"):
+        header = " ".join(th.get_text(" ", strip=True) for th in table.find_all("th"))
+        if "名称" not in header or "性能目安" not in header:
+            continue
+        if "詳細" not in header:
+            # 過去製品一覧（中古列中心）を避ける。
+            continue
+
+        for row in table.find_all("tr"):
+            cells = row.find_all("td")
+            if len(cells) < 4:
+                continue
+
+            name = cells[0].get_text(" ", strip=True)
+            vram_raw = cells[1].get_text(" ", strip=True)
+            score_raw = cells[2].get_text(" ", strip=True)
+            detail_anchor = cells[3].find("a", href=True)
+            detail_url = urljoin(DOSPARA_GPU_PERFORMANCE_URL, detail_anchor["href"]) if detail_anchor else ""
+
+            if not name or "シリーズ" in name:
+                continue
+
+            score_digits = re.sub(r"[^0-9]", "", score_raw)
+            if not score_digits:
+                continue
+
+            perf_score = int(score_digits)
+            model_key = _extract_gpu_model_key(name)
+            is_laptop = "laptop" in name.lower()
+            vram_gb = _parse_gpu_vram_gb(vram_raw)
+
+            row_key = (model_key or name, vram_gb, perf_score, is_laptop)
+            if row_key in seen:
+                continue
+            seen.add(row_key)
+
+            entries.append(
+                {
+                    "name": name,
+                    "model_key": model_key,
+                    "vendor": _infer_gpu_vendor(name),
+                    "vram_raw": vram_raw,
+                    "vram_gb": vram_gb,
+                    "perf_score": perf_score,
+                    "detail_url": detail_url,
+                    "is_laptop": is_laptop,
+                }
+            )
+
+    return {
+        "source_name": "dospara_gpu_performance_page",
+        "source_url": DOSPARA_GPU_PERFORMANCE_URL,
+        "updated_at_source": updated_at_source,
+        "score_note": GPU_PERF_SCORE_NOTE,
+        "entries": entries,
+    }
+
+
+def _normalize_cpu_model_name(text: str) -> str:
+    return re.sub(r"\s+", " ", (text or "").replace("NEW", "").strip())
+
+
+def _parse_cpu_perf_score(text: str) -> Optional[int]:
+    digits = re.sub(r"[^0-9]", "", text or "")
+    if not digits:
+        return None
+    return int(digits)
+
+
+def _is_excluded_intel_13_14_generation(model_name: str) -> bool:
+    normalized = _normalize_cpu_model_name(model_name).upper()
+    return INTEL_13_14_GEN_PATTERN.search(normalized) is not None
+
+
+def _extract_cpu_performance_entries(html: str, vendor: str, source_url: str, exclude_intel_13_14: bool) -> Dict[str, List[Dict]]:
+    soup = BeautifulSoup(html, "html.parser")
+    entries: List[Dict] = []
+    excluded: List[Dict] = []
+    seen = set()
+
+    for table in soup.find_all("table"):
+        header = " ".join(th.get_text(" ", strip=True) for th in table.find_all("th"))
+        if "型番" not in header or "性能目安" not in header:
+            continue
+
+        for row in table.find_all("tr"):
+            cells = row.find_all("td")
+            if len(cells) < 2:
+                continue
+
+            model_name = _normalize_cpu_model_name(cells[0].get_text(" ", strip=True))
+            perf_score = _parse_cpu_perf_score(cells[-1].get_text(" ", strip=True))
+            if not model_name or perf_score is None:
+                continue
+
+            key = (vendor, model_name.upper(), perf_score)
+            if key in seen:
+                continue
+            seen.add(key)
+
+            row_data = {
+                "vendor": vendor,
+                "model_name": model_name,
+                "perf_score": perf_score,
+                "source_url": source_url,
+            }
+
+            if vendor == "intel" and exclude_intel_13_14 and _is_excluded_intel_13_14_generation(model_name):
+                excluded.append({**row_data, "excluded_reason": "intel_13th_14th_generation"})
+                continue
+
+            entries.append(row_data)
+
+    return {"entries": entries, "excluded": excluded}
+
+
+def fetch_dospara_cpu_selection_material(timeout: int = 20, session: Optional[requests.Session] = None, exclude_intel_13_14: bool = True) -> Dict:
+    """Fetch CPU comparison materials from Dospara AMD/Intel pages with optional Intel 13/14 gen exclusion."""
+    client = session or requests.Session()
+    sources = [
+        ("amd", DOSPARA_AMD_CPU_PERFORMANCE_URL),
+        ("intel", DOSPARA_INTEL_CPU_PERFORMANCE_URL),
+    ]
+
+    all_entries: List[Dict] = []
+    excluded_entries: List[Dict] = []
+
+    for vendor, url in sources:
+        response = client.get(url, headers=DEFAULT_HEADERS, timeout=timeout)
+        response.raise_for_status()
+        extracted = _extract_cpu_performance_entries(
+            response.text,
+            vendor=vendor,
+            source_url=url,
+            exclude_intel_13_14=exclude_intel_13_14,
+        )
+        all_entries.extend(extracted["entries"])
+        excluded_entries.extend(extracted["excluded"])
+
+    all_entries.sort(key=lambda row: (row.get("perf_score", 0), row.get("model_name", "")), reverse=True)
+
+    return {
+        "source_name": "dospara_cpu_comparison_pages",
+        "source_urls": [url for _, url in sources],
+        "exclude_intel_13_14": bool(exclude_intel_13_14),
+        "entry_count": len(all_entries),
+        "excluded_count": len(excluded_entries),
+        "entries": all_entries,
+        "excluded_entries": excluded_entries,
     }
 
 
