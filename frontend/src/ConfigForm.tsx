@@ -8,7 +8,14 @@ import {
   type StorageInventoryResponse,
 } from "./api";
 
-const FALLBACK_MARKET_PRICE_RANGE = {
+type MarketRangeState = {
+  min: number;
+  max: number;
+  default: number;
+  gaming_x3d_recommended_min?: number;
+};
+
+const FALLBACK_MARKET_PRICE_RANGE: MarketRangeState = {
   min: 89980,
   max: 404980,
   default: 250000,
@@ -243,7 +250,7 @@ function getMainStorageAnnotation(): string {
 }
 
 export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
-  const [marketRange, setMarketRange] = useState(FALLBACK_MARKET_PRICE_RANGE);
+  const [marketRange, setMarketRange] = useState<MarketRangeState>(FALLBACK_MARKET_PRICE_RANGE);
   const [marketRangeLoading, setMarketRangeLoading] = useState(true);
   const [marketRangeError, setMarketRangeError] = useState<string | null>(null);
   const [budget, setBudget] = useState(FALLBACK_MARKET_PRICE_RANGE.default);
@@ -286,7 +293,12 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
         const range = await getMarketPriceRange();
         if (range.min > 0 && range.max >= range.min) {
           const safeDefault = Math.min(range.max, Math.max(range.min, range.default));
-          setMarketRange({ min: range.min, max: range.max, default: safeDefault });
+          setMarketRange({
+            min: range.min,
+            max: range.max,
+            default: safeDefault,
+            gaming_x3d_recommended_min: range.gaming_x3d_recommended_min,
+          });
           setBudget((current) => {
             if (current < range.min || current > range.max) {
               return safeDefault;
@@ -350,10 +362,10 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
     setBudget((current) => {
       const clampedCurrent = Math.min(budgetMax, Math.max(budgetMin, current));
       if (prev === "cost" && buildPriority === "spec") {
-        return Math.min(budgetMax, Math.round(clampedCurrent * 1.1));
+        return Math.min(budgetMax, Math.round(clampedCurrent * 1.2));
       }
       if (prev === "spec" && buildPriority === "cost") {
-        return Math.max(budgetMin, Math.round(clampedCurrent / 1.1));
+        return Math.max(budgetMin, Math.round(clampedCurrent / 1.2));
       }
       return clampedCurrent;
     });
@@ -416,7 +428,13 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
       baseValues.map((price) => applyPriorityPremium(price - sub));
 
     if (usage === "gaming") {
-      const bases = [184980, 274980, 589980, 1309980].map((value) => Math.min(budgetMax, value));
+      const gamingX3dMin = marketRange.gaming_x3d_recommended_min ?? 184980;
+      const bases = [
+        Math.max(184980, gamingX3dMin),
+        Math.max(274980, gamingX3dMin + 60000),
+        Math.max(589980, gamingX3dMin + 260000),
+        Math.max(1309980, gamingX3dMin + 700000),
+      ].map((value) => Math.min(budgetMax, value));
       const [entry, middle, high, flagship] = toPresetValues(bases);
       return [
         { label: "ローエンド", value: entry },
@@ -462,7 +480,7 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
       { label: "ハイエンド", value: high },
       { label: "プレミアム", value: flagship },
     ];
-  }, [budgetMax, buildPriority, marketRange.min, usage]);
+  }, [budgetMax, buildPriority, marketRange.gaming_x3d_recommended_min, marketRange.min, usage]);
 
   const usagePriceHint = useMemo(() => {
     if (presets.length === 0) {
@@ -683,6 +701,9 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
                       用途別の推奨予算帯: <span className="font-semibold text-slate-900">{`¥${usagePriceHint.min.toLocaleString("ja-JP")} - ¥${usagePriceHint.max.toLocaleString("ja-JP")}`}</span>
                     </div>
                   )}
+                  {usage === "gaming" && typeof marketRange.gaming_x3d_recommended_min === "number" && (
+                    <p className="text-xs text-blue-700">{`X3D必須構成の推奨下限: ¥${marketRange.gaming_x3d_recommended_min.toLocaleString("ja-JP")}`}</p>
+                  )}
                   {marketRangeError && <p className="text-xs text-amber-700">{marketRangeError}</p>}
                 </div>
               </>
@@ -802,7 +823,7 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
                     </button>
                   ))}
                 </div>
-                <p className="mt-2 text-xs text-slate-500">スペック重視に切り替えると表示予算を10%上乗せします。</p>
+                <p className="mt-2 text-xs text-slate-500">スペック重視に切り替えると表示予算を20%上乗せします。</p>
               </div>
             </div>
           </section>

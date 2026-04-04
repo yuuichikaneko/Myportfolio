@@ -192,6 +192,10 @@ CACHES = {
     }
 }
 
+# GPU performance import migration flags
+GPU_PERF_ENABLE_LEGACY_SPECS_SYNC = config('GPU_PERF_ENABLE_LEGACY_SPECS_SYNC', default=False, cast=bool)
+GPU_PERF_ENABLE_LEGACY_SPECS_FALLBACK = config('GPU_PERF_ENABLE_LEGACY_SPECS_FALLBACK', default=False, cast=bool)
+
 # Dospara scraper configuration (override per environment as needed)
 DOSPARA_SCRAPER = {
     'url': 'https://www.dospara.co.jp/parts',
