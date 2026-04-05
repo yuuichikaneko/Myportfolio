@@ -71,6 +71,7 @@ export interface GenerateConfigResponse {
   x3d_enforced?: boolean;
   minimum_gaming_gpu_perf_score?: number;
   selected_gpu_perf_score?: number;
+  selected_gpu_gaming_tier_label?: string;
   message?: string;
   cooler_type?: "air" | "liquid" | "any";
   radiator_size?: "120" | "240" | "360" | "any";
@@ -307,6 +308,8 @@ export interface CpuSelectionEntryResponse {
   vendor: string;
   model_name: string;
   perf_score: number;
+  price?: number | null;
+  value_score?: number | null;
   source_url: string;
 }
 

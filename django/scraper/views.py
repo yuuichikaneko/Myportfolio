@@ -1,20 +1,30 @@
 import re
+import random
+import time
 from collections import defaultdict
 
 from rest_framework import viewsets, status
 from django.conf import settings
+from django.db import transaction
 from django.db.models import Min, Max, Avg, Count as DbCount
+from django.utils import timezone
 from rest_framework.decorators import action
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from .dospara_scraper import fetch_dospara_cpu_selection_material, fetch_dospara_market_price_range
-from .models import Configuration, GPUPerformanceEntry, GPUPerformanceSnapshot, PCPart, ScraperStatus
+from .models import Configuration, CPUSelectionEntry, CPUSelectionSnapshot, GPUPerformanceEntry, GPUPerformanceSnapshot, PCPart, ScraperStatus
 from .serializers import PCPartSerializer, ConfigurationSerializer, ScraperStatusSerializer
 
 
 _GPU_PERF_CACHE = {
-    'snapshot_id': None,
+    'snapshot_key': None,
     'scores': {},
+}
+
+_CPU_SELECTION_CACHE = {
+    'loaded_at': 0.0,
+    'scores': {},
+    'entries': [],
 }
 
 
@@ -93,7 +103,7 @@ CREATOR_MOTHERBOARD_FLOOR_BY_PRIORITY = {
 }
 
 BUDGET_TIER_THRESHOLDS = {
-    'low': 180000,
+    'low': 220000,
     'middle': 300000,
     'high': 500000,
 }
@@ -234,6 +244,65 @@ CPU_VENDOR_KEYWORDS = {
 GAMING_SPEC_GPU_KEYWORDS = (
     'rtx',
     'radeon rx',
+)
+
+GAMING_CREATIVE_GPU_KEYWORDS = (
+    'ai pro',
+    'creator',
+    'proart',
+    'radeon pro',
+    'rtx pro',
+    'workstation',
+    'professional',
+)
+
+GAMING_COST_CPU_PRICE_CAP = 50000
+
+GAMING_GPU_TIER_LABEL_RULES = (
+    (
+        'フラグシップ',
+        (
+            r'rtx\s*5090\b',
+            r'rtx\s*5080\b',
+            r'rx\s*9070\s*xt\b',
+            r'rx9070xt\b',
+        ),
+    ),
+    (
+        'ハイエンド',
+        (
+            r'rtx\s*5070\s*ti\b',
+            r'rtx\s*5070\b',
+            r'rx\s*9070\b',
+            r'rx9070\b',
+        ),
+    ),
+    (
+        'ミドル',
+        (
+            r'rtx\s*5060\s*ti\b',
+            r'rtx\s*5060\b',
+            r'rx\s*9060\s*xt\b',
+            r'rx9060xt\b',
+        ),
+    ),
+    (
+        'ローエンド',
+        (
+            r'gtx\s*1650\b',
+            r'gtx\s*1660\s*super\b',
+            r'gtx1660super\b',
+            r'gtx\s*1660\b',
+            r'rtx\s*3050\b',
+            r'rtx\s*5050\b',
+            r'rx\s*6400\b',
+            r'rx6400\b',
+            r'rx\s*7600\b',
+            r'rx7600\b',
+            r'rx\s*9060\b',
+            r'rx9060\b',
+        ),
+    ),
 )
 
 GAMING_CPU_X3D_PATTERN = re.compile(r'\b(?:ryzen\s*[3579]\s*)?\d{4,5}x3d\b', re.IGNORECASE)
@@ -978,6 +1047,51 @@ def _gaming_spec_gpu_tier(part):
     return 0
 
 
+def _is_gaming_gpu_within_priority_cap(part, build_priority):
+    if not part or build_priority not in {'cost', 'spec'}:
+        return True
+
+    text = f"{getattr(part, 'name', '')} {getattr(part, 'url', '')}".lower()
+
+    if _is_gaming_creative_gpu(part):
+        return False
+
+    if build_priority == 'cost':
+        excluded_patterns = (
+            r'rtx\s*5070\s*ti\b',
+            r'rtx\s*5070\b',
+            r'rtx\s*5080\b',
+            r'rtx\s*5090\b',
+            r'rx\s*9070\s*xt\b',
+            r'rx9070xt\b',
+            r'rx\s*9070\b',
+            r'rx9070\b',
+        )
+        return not any(re.search(pattern, text) for pattern in excluded_patterns)
+
+    excluded_patterns = (
+        r'rtx\s*5070\s*ti\b',
+        r'rtx\s*5080\b',
+        r'rtx\s*5090\b',
+        r'rx\s*9070\s*xt\b',
+        r'rx9070xt\b',
+    )
+    return not any(re.search(pattern, text) for pattern in excluded_patterns)
+
+
+def _is_gaming_creative_gpu(part):
+    text = f"{getattr(part, 'name', '')} {getattr(part, 'url', '')}".lower()
+    return any(keyword in text for keyword in GAMING_CREATIVE_GPU_KEYWORDS)
+
+
+def _infer_gaming_gpu_tier_label(part):
+    text = f"{getattr(part, 'name', '')} {getattr(part, 'url', '')}".lower()
+    for label, patterns in GAMING_GPU_TIER_LABEL_RULES:
+        if any(re.search(pattern, text) for pattern in patterns):
+            return label
+    return ''
+
+
 def _minimum_gaming_spec_gpu_tier(budget, usage, options=None):
     options = options or {}
     if usage != 'gaming' or options.get('build_priority') != 'spec':
@@ -999,7 +1113,11 @@ def _is_low_end_gaming_budget(budget, usage):
 
 def _minimum_gaming_low_end_gpu_perf_score(budget, usage):
     if usage == 'gaming':
-        # Dospara Time Spy benchmark guidance: use 5000+ as practical gaming floor.
+        # 低予算 gaming では 5000+ を強制すると 3050-class が候補外になるため、
+        # 低予算帯は perf floor を外す。
+        if _is_low_end_gaming_budget(budget, usage):
+            return 0
+        # それ以外の gaming では Dospara Time Spy benchmark guidance を使う。
         return 5000
     return 0
 
@@ -1015,6 +1133,23 @@ def _gaming_spec_gpu_price_floor(budget, usage, options=None):
     if budget >= 150000:
         return max(47800, int(budget * 0.26))
     return 0
+
+
+def _gaming_low_end_gpu_policy(budget, usage, build_priority):
+    if usage != 'gaming' or budget >= BUDGET_TIER_THRESHOLDS['low']:
+        return None
+
+    if build_priority == 'cost':
+        return {
+            'target_price': max(31980, int(budget * 0.195)),
+            'price_cap': max(34980, int(budget * 0.21)),
+        }
+    if build_priority == 'spec':
+        return {
+            'target_price': max(44980, int(budget * 0.27)),
+            'price_cap': max(49980, int(budget * 0.30)),
+        }
+    return None
 
 
 def _creator_gpu_tier(part):
@@ -1239,6 +1374,10 @@ def _extract_gpu_model_key_for_perf(text):
     return None
 
 
+def _normalize_gpu_model_key(value):
+    return re.sub(r'[^A-Z0-9]+', '', (value or '').upper())
+
+
 def _load_latest_gpu_perf_scores():
     try:
         latest = GPUPerformanceSnapshot.objects.order_by('-fetched_at', '-id').first()
@@ -1247,7 +1386,8 @@ def _load_latest_gpu_perf_scores():
     if latest is None:
         return {}
 
-    if _GPU_PERF_CACHE['snapshot_id'] == latest.id:
+    snapshot_key = (latest.id, latest.fetched_at)
+    if _GPU_PERF_CACHE['snapshot_key'] == snapshot_key:
         return _GPU_PERF_CACHE['scores']
 
     rows = GPUPerformanceEntry.objects.filter(snapshot=latest, is_laptop=False).values(
@@ -1258,10 +1398,10 @@ def _load_latest_gpu_perf_scores():
         model_key = row.get('model_key')
         if not model_key:
             continue
-        key = (model_key, row.get('vram_gb'))
+        key = (_normalize_gpu_model_key(model_key), row.get('vram_gb'))
         scores[key] = max(scores.get(key, 0), int(row.get('perf_score') or 0))
 
-    _GPU_PERF_CACHE['snapshot_id'] = latest.id
+    _GPU_PERF_CACHE['snapshot_key'] = snapshot_key
     _GPU_PERF_CACHE['scores'] = scores
     return scores
 
@@ -1270,24 +1410,29 @@ def _get_gpu_perf_score_from_snapshot(part):
     model_key = _extract_gpu_model_key_for_perf(getattr(part, 'name', ''))
     if not model_key:
         return None
+    normalized_model_key = _normalize_gpu_model_key(model_key)
 
     scores = _load_latest_gpu_perf_scores()
     if not scores:
         return None
 
     vram_gb = _infer_gpu_memory_gb(part)
-    exact = scores.get((model_key, vram_gb))
+    exact = scores.get((normalized_model_key, vram_gb))
     if exact is not None:
         return exact
 
     # VRAM不一致時は同モデルの最大スコアを採用。
-    candidates = [score for (key_model, _), score in scores.items() if key_model == model_key]
+    candidates = [score for (key_model, _), score in scores.items() if key_model == normalized_model_key]
     if candidates:
         return max(candidates)
     return None
 
 
 def _pick_gaming_spec_gpu(candidates):
+    if not candidates:
+        return None
+
+    candidates = [p for p in candidates if not _is_gaming_creative_gpu(p)]
     if not candidates:
         return None
 
@@ -1304,6 +1449,53 @@ def _pick_gaming_spec_gpu(candidates):
     )[0]
 
 
+def _pick_gaming_low_end_gpu(candidates, budget, usage, build_priority):
+    if not candidates:
+        return None
+
+    policy = _gaming_low_end_gpu_policy(budget, usage, build_priority)
+    if not policy:
+        return None
+
+    target_price = int(policy['target_price'])
+    price_cap = int(policy['price_cap'])
+    
+    bounded_candidates = [
+        p
+        for p in candidates
+        if p.price <= price_cap and _is_gaming_gpu_within_priority_cap(p, build_priority)
+    ]
+    
+    if not bounded_candidates:
+        return None
+
+    # ローエンド cost では RTX 3050 を積極的に優先（distance-to-target）
+    if build_priority == 'cost' and budget < BUDGET_TIER_THRESHOLDS['low']:
+        rtx_3050_candidates = [
+            p for p in bounded_candidates 
+            if 'rtx 3050' in f"{p.name} {p.url}".lower() and p.price <= price_cap
+        ]
+        if rtx_3050_candidates:
+            # RTX 3050 が複数あれば target_price に最も近いものを選ぶ
+            return sorted(
+                rtx_3050_candidates,
+                key=lambda p: (
+                    abs(int(p.price) - target_price),
+                    -_infer_gaming_gpu_perf_score(p),
+                    p.price,
+                ),
+            )[0]
+    
+    return sorted(
+        bounded_candidates,
+        key=lambda p: (
+            abs(int(p.price) - target_price),
+            -_infer_gaming_gpu_perf_score(p),
+            p.price,
+        ),
+    )[0]
+
+
 def _pick_gaming_cost_gpu_for_auto_adjust(candidates, reference_budget):
     if not candidates:
         return None
@@ -1317,13 +1509,23 @@ def _pick_gaming_cost_gpu_for_auto_adjust(candidates, reference_budget):
 
     target_price = int(budget * 0.30)
     price_cap = int(budget * 0.31)
-    bounded_candidates = [p for p in candidates if p.price <= price_cap]
+    bounded_candidates = [
+        p for p in candidates
+        if p.price <= price_cap
+        and not _is_gaming_cost_excluded_gpu(p)
+        and _is_gaming_gpu_within_priority_cap(p, 'cost')
+    ]
     if not bounded_candidates:
-        bounded_candidates = candidates
+        bounded_candidates = [
+            p for p in candidates
+            if not _is_gaming_cost_excluded_gpu(p)
+            and _is_gaming_gpu_within_priority_cap(p, 'cost')
+        ] or candidates
 
     return sorted(
         bounded_candidates,
         key=lambda p: (
+            p.price,
             abs(p.price - target_price),
             -_infer_gaming_gpu_perf_score(p),
             p.price,
@@ -1331,7 +1533,18 @@ def _pick_gaming_cost_gpu_for_auto_adjust(candidates, reference_budget):
     )[0]
 
 
+def _is_gaming_cost_excluded_gpu(part):
+    text = f"{getattr(part, 'name', '')} {getattr(part, 'url', '')}".lower()
+    return bool(re.search(r'rtx\s*5050\b', text))
+
+
+def _gaming_cost_cpu_price_cap(_budget):
+    return GAMING_COST_CPU_PRICE_CAP
+
+
 def _is_gaming_cpu_x3d_preferred(part):
+    if not part:
+        return False
     text = f"{part.name} {part.url}".lower()
     if 'ryzen' not in text and 'amd' not in text:
         return False
@@ -1346,6 +1559,119 @@ def _is_cpu_x3d(part):
     return GAMING_CPU_X3D_PATTERN.search(text) is not None
 
 
+def _extract_cpu_model_key_for_perf(text):
+    normalized = re.sub(r'\s+', ' ', (text or '').strip())
+    patterns = [
+        r'Ryzen\s+[3579]\s+\d{4}[A-Z0-9]*',
+        r'Core\s+Ultra\s+[3579]\s+\d{3}[A-Z]*',
+        r'Core\s+i[3579]\s*-?\s*\d{4,5}[A-Z]*',
+        r'Pentium\s+G\d{3,4}[A-Z]*',
+        r'Celeron\s+G\d{3,4}[A-Z]*',
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, normalized, flags=re.IGNORECASE)
+        if match:
+            return re.sub(r'\s+', ' ', match.group(0)).strip()
+    return None
+
+
+def _load_latest_cpu_selection_scores(cache_ttl_seconds=600, force_refresh=False):
+    now = time.time()
+    if not force_refresh and (now - _CPU_SELECTION_CACHE['loaded_at']) < cache_ttl_seconds and _CPU_SELECTION_CACHE['entries']:
+        return _CPU_SELECTION_CACHE['scores'], _CPU_SELECTION_CACHE['entries']
+
+    if not force_refresh:
+        snapshot, db_scores, db_entries = _load_latest_cpu_selection_scores_from_db()
+        if snapshot and db_entries:
+            snapshot_age_seconds = (timezone.now() - snapshot.fetched_at).total_seconds()
+            if snapshot_age_seconds < cache_ttl_seconds:
+                _CPU_SELECTION_CACHE['loaded_at'] = now
+                _CPU_SELECTION_CACHE['scores'] = db_scores
+                _CPU_SELECTION_CACHE['entries'] = db_entries
+                return db_scores, db_entries
+
+    try:
+        data = fetch_dospara_cpu_selection_material(timeout=8, exclude_intel_13_14=True)
+        entries = data.get('entries', [])
+        scores = {}
+        for entry in entries:
+            model_name = _normalize_cpu_model_query(entry.get('model_name'))
+            if not model_name:
+                continue
+            score = int(entry.get('perf_score', 0) or 0)
+            if score <= 0:
+                continue
+            scores[model_name] = max(scores.get(model_name, 0), score)
+
+        try:
+            with transaction.atomic():
+                _store_cpu_selection_snapshot(data)
+        except Exception:
+            pass
+
+        _CPU_SELECTION_CACHE['loaded_at'] = now
+        _CPU_SELECTION_CACHE['scores'] = scores
+        _CPU_SELECTION_CACHE['entries'] = [_serialize_cpu_selection_entry(entry) for entry in entries]
+        return scores, entries
+    except Exception:
+        snapshot, db_scores, db_entries = _load_latest_cpu_selection_scores_from_db()
+        if snapshot and db_entries:
+            _CPU_SELECTION_CACHE['loaded_at'] = now
+            _CPU_SELECTION_CACHE['scores'] = db_scores
+            _CPU_SELECTION_CACHE['entries'] = db_entries
+            return db_scores, db_entries
+        return {}, []
+
+
+def _get_cpu_perf_score(part):
+    """CPU の Dospara 性能目安表スコア（39/52など）を取得する。"""
+    if not part:
+        return None
+
+    # 互換性のため、specs 側に score がある場合は優先。
+    try:
+        score = _get_spec(part, 'cpu_perf_score', None)
+        if score is None:
+            raise ValueError
+        parsed = int(float(score))
+        if parsed > 0:
+            return parsed
+    except (TypeError, ValueError):
+        pass
+
+    scores, entries = _load_latest_cpu_selection_scores()
+    if not scores:
+        return None
+
+    candidate_keys = []
+    raw_name = getattr(part, 'name', '')
+    extracted = _extract_cpu_model_key_for_perf(raw_name)
+    if extracted:
+        candidate_keys.append(_normalize_cpu_model_query(extracted))
+    candidate_keys.append(_normalize_cpu_model_query(raw_name))
+
+    for key in candidate_keys:
+        matched_score = scores.get(key)
+        if matched_score is not None:
+            return matched_score
+
+    for key in candidate_keys:
+        matched = _match_cpu_model_entry(entries, key)
+        if matched:
+            matched_name = _normalize_cpu_model_query(matched.get('model_name'))
+            matched_score = scores.get(matched_name)
+            if matched_score is not None:
+                return matched_score
+    return None
+
+
+def _minimum_gaming_cpu_perf_score(usage):
+    """gaming 用途での CPU 最小性能目安スコア（性能目安表基準）を返す"""
+    if usage == 'gaming':
+        return 2000
+    return 0
+
+
 def _response_has_gaming_x3d_cpu(response_data):
     if not isinstance(response_data, dict):
         return False
@@ -1356,6 +1682,28 @@ def _response_has_gaming_x3d_cpu(response_data):
         text = f"{part.get('name', '')} {part.get('url', '')}".lower()
         return GAMING_CPU_X3D_PATTERN.search(text) is not None
     return False
+
+
+def _has_same_configuration_signature(latest_config, usage, budget, selected_parts, extra_storage_parts, use_igpu):
+    if not latest_config:
+        return False
+    if latest_config.usage != usage or int(latest_config.budget) != int(budget):
+        return False
+
+    expected_gpu = None if use_igpu else selected_parts.get('gpu')
+    return (
+        latest_config.cpu_id == (selected_parts.get('cpu').id if selected_parts.get('cpu') else None)
+        and latest_config.cpu_cooler_id == (selected_parts.get('cpu_cooler').id if selected_parts.get('cpu_cooler') else None)
+        and latest_config.gpu_id == (expected_gpu.id if expected_gpu else None)
+        and latest_config.motherboard_id == (selected_parts.get('motherboard').id if selected_parts.get('motherboard') else None)
+        and latest_config.memory_id == (selected_parts.get('memory').id if selected_parts.get('memory') else None)
+        and latest_config.storage_id == (selected_parts.get('storage').id if selected_parts.get('storage') else None)
+        and latest_config.storage2_id == (extra_storage_parts.get('storage2').id if extra_storage_parts.get('storage2') else None)
+        and latest_config.storage3_id == (extra_storage_parts.get('storage3').id if extra_storage_parts.get('storage3') else None)
+        and latest_config.os_id == (selected_parts.get('os').id if selected_parts.get('os') else None)
+        and latest_config.psu_id == (selected_parts.get('psu').id if selected_parts.get('psu') else None)
+        and latest_config.case_id == (selected_parts.get('case').id if selected_parts.get('case') else None)
+    )
 
 
 def _recommend_min_budget_for_gaming_x3d(
@@ -1408,6 +1756,74 @@ def _recommend_min_budget_for_gaming_x3d(
             continue
         if _response_has_gaming_x3d_cpu(simulated):
             return probe_budget
+
+    return None
+
+
+def _recommend_min_budget_for_gaming_x3d_from_low_end_config(
+    selected_parts,
+    current_budget,
+    usage,
+):
+    if usage != 'gaming' or not selected_parts:
+        return None
+
+    current_cpu = selected_parts.get('cpu')
+    if not current_cpu:
+        return None
+
+    current_total = _sum_selected_price(selected_parts)
+    baseline_budget = max(int(current_budget or 0), current_total)
+
+    current_cpu_price = int(getattr(current_cpu, 'price', 0) or 0)
+    current_socket = _get_spec(current_cpu, 'socket')
+    current_motherboard = selected_parts.get('motherboard')
+    current_motherboard_socket = _infer_motherboard_socket(current_motherboard) if current_motherboard else ''
+    current_memory = selected_parts.get('memory')
+    current_memory_type = _infer_memory_type(current_memory) or _infer_motherboard_memory_type(current_motherboard)
+
+    x3d_candidates = [p for p in PCPart.objects.filter(part_type='cpu').order_by('price') if _is_gaming_cpu_x3d_preferred(p)]
+    if not x3d_candidates:
+        return None
+
+    if current_socket:
+        socket_matched = [p for p in x3d_candidates if str(_get_spec(p, 'socket', '') or '').upper() == str(current_socket).upper()]
+        if socket_matched:
+            x3d_candidates = socket_matched
+
+    for cpu in x3d_candidates:
+        cpu_socket = str(_get_spec(cpu, 'socket', '') or current_socket or '').upper()
+        if current_motherboard_socket and cpu_socket and current_motherboard_socket == cpu_socket:
+            estimated_budget = baseline_budget - current_cpu_price + int(cpu.price)
+            return int(((max(estimated_budget, baseline_budget) + 4999) // 5000) * 5000)
+
+        compatible_motherboards = [
+            part for part in PCPart.objects.filter(part_type='motherboard').order_by('price')
+            if _is_part_suitable('motherboard', part) and _infer_motherboard_socket(part) == cpu_socket
+        ]
+        if not compatible_motherboards:
+            continue
+
+        motherboard = compatible_motherboards[0]
+        estimated_budget = baseline_budget - current_cpu_price + int(cpu.price)
+        if current_motherboard:
+            estimated_budget -= int(current_motherboard.price)
+        estimated_budget += int(motherboard.price)
+
+        motherboard_memory_type = _infer_motherboard_memory_type(motherboard)
+        if current_memory and current_memory_type and motherboard_memory_type and current_memory_type != motherboard_memory_type:
+            memory_candidates = [
+                part for part in PCPart.objects.filter(part_type='memory').order_by('price')
+                if _is_part_suitable('memory', part) and _infer_memory_type(part) == motherboard_memory_type
+            ]
+            if not memory_candidates:
+                continue
+
+            replacement_memory = memory_candidates[0]
+            estimated_budget -= int(current_memory.price)
+            estimated_budget += int(replacement_memory.price)
+
+        return int(((max(estimated_budget, baseline_budget) + 4999) // 5000) * 5000)
 
     return None
 
@@ -1992,10 +2408,30 @@ def _pick_part_by_target(part_type, budget, usage, weights_override=None, option
         vendor_filtered = [p for p in candidates if _is_cpu_vendor_match(p, cpu_vendor)]
         if vendor_filtered:
             candidates = vendor_filtered
+        if usage == 'gaming':
+            candidates = [p for p in candidates if _is_cpu_vendor_match(p, 'amd')]
         if usage == 'gaming' and require_gaming_x3d_cpu:
             x3d_filtered = [p for p in candidates if _is_gaming_cpu_x3d_preferred(p)]
             if x3d_filtered:
                 candidates = x3d_filtered
+            else:
+                candidates = []
+        # gaming 用途: 性能目安表スコアが 2000 以下の CPU は除外する。
+        # X3D必須時は、スコア未登録で候補が消えないようこのフィルタを適用しない。
+        if usage == 'gaming' and not require_gaming_x3d_cpu:
+            minimum_perf_score = _minimum_gaming_cpu_perf_score(usage)
+            if minimum_perf_score > 0:
+                perf_filtered = [
+                    p for p in candidates
+                    if (
+                        _is_gaming_cpu_x3d_preferred(p)
+                        or (_get_cpu_perf_score(p) is not None and _get_cpu_perf_score(p) > minimum_perf_score)
+                    )
+                ]
+                if perf_filtered:
+                    candidates = perf_filtered
+                else:
+                    candidates = []
         if usage == 'creator':
             creator_cpu_filtered = [p for p in candidates if _cpu_meets_creator_minimum(p, min_cores=8, min_threads=16)]
             if creator_cpu_filtered:
@@ -2006,6 +2442,13 @@ def _pick_part_by_target(part_type, budget, usage, weights_override=None, option
             socket_filtered = [p for p in candidates if _infer_motherboard_socket(p) == cpu_socket]
             if socket_filtered:
                 candidates = socket_filtered
+        
+        # ローエンド gaming/cost では B860/X670 など低価格チップセットを優先
+        if options.get('usage') == 'gaming' and options.get('build_priority') == 'cost' and options.get('budget', 0) < BUDGET_TIER_THRESHOLDS['low']:
+            low_end_chipsets = [p for p in candidates if _infer_motherboard_chipset(p) in ('b860', 'b760', 'x670')]
+            if low_end_chipsets:
+                candidates = low_end_chipsets
+        
         max_chipset = options.get('max_motherboard_chipset', 'any')
         if max_chipset != 'any':
             if max_chipset == 'x870':
@@ -2024,6 +2467,13 @@ def _pick_part_by_target(part_type, budget, usage, weights_override=None, option
                 candidates = floor_filtered
 
         candidates = _filter_candidates_by_part_price_band(candidates, 'motherboard', budget, usage)
+
+        # ローエンド gaming/cost ではマザーボード価格を制限（GPU予算を圧迫しないため）
+        if usage == 'gaming' and build_priority == 'cost' and budget < BUDGET_TIER_THRESHOLDS['low']:
+            mb_price_cap = max(25000, int(budget * 0.18))
+            capped_candidates = [p for p in candidates if p.price <= mb_price_cap]
+            if capped_candidates:
+                candidates = capped_candidates
 
         candidates = _prefer_motherboard_candidates(candidates, case_size)
     elif part_type == 'memory':
@@ -2074,6 +2524,7 @@ def _pick_part_by_target(part_type, budget, usage, weights_override=None, option
             )
 
     if part_type == 'gpu' and usage == 'gaming' and build_priority == 'spec':
+        candidates = [p for p in candidates if _is_gaming_gpu_within_priority_cap(p, 'spec')]
         preferred_gpu = [p for p in candidates if _is_gaming_spec_gpu_preferred(p, minimum_gaming_gpu_tier)]
         if preferred_gpu:
             candidates = preferred_gpu
@@ -2126,11 +2577,34 @@ def _pick_part_by_target(part_type, budget, usage, weights_override=None, option
             pick = _pick_gaming_cost_gpu_for_auto_adjust(candidates, auto_adjust_reference_budget)
             if pick:
                 return pick
+        
+        # ローエンド gaming/cost では RTX 3050 を積極的に優先
+        if budget < BUDGET_TIER_THRESHOLDS['low']:
+            price_cap = max(34980, int(budget * 0.21))
+            rtx_3050_pool = [
+                p for p in candidates
+                if 'rtx 3050' in f"{p.name} {p.url}".lower() 
+                and p.price <= price_cap
+                and _is_gaming_gpu_within_priority_cap(p, 'cost')
+            ]
+            if rtx_3050_pool:
+                target_price = max(31980, int(budget * 0.195))
+                return sorted(
+                    rtx_3050_pool,
+                    key=lambda p: (abs(int(p.price) - target_price), -_infer_gaming_gpu_perf_score(p), p.price),
+                )[0]
+        
         cap_budget = int(auto_adjust_reference_budget) if auto_adjust_reference_budget else budget
         gaming_cost_gpu_cap = int(cap_budget * 0.31)
-        capped_candidates = [p for p in candidates if p.price <= gaming_cost_gpu_cap]
+        capped_candidates = [
+            p for p in candidates
+            if p.price <= gaming_cost_gpu_cap and _is_gaming_gpu_within_priority_cap(p, 'cost')
+        ]
         if capped_candidates:
             candidates = capped_candidates
+        elif candidates:
+            # cost重視で上限に収まる候補がない場合は、最安GPUを選ぶ。
+            return sorted(candidates, key=lambda p: p.price)[0]
 
     if not candidates:
         return None
@@ -2167,10 +2641,34 @@ def _pick_part_by_target(part_type, budget, usage, weights_override=None, option
                 within_target,
                 key=lambda p: _psu_selection_sort_key(p, required_psu_wattage),
             )[0]
-        if part_type == 'cpu' and usage == 'gaming' and cpu_vendor != 'intel':
-            preferred_x3d = [p for p in within_target if _is_gaming_cpu_x3d_preferred(p)]
-            if preferred_x3d:
-                within_target = preferred_x3d
+        if part_type == 'cpu' and usage == 'gaming':
+            # ゲーミングCPU: Intel限定
+            intel_within_target = [p for p in within_target if _is_cpu_vendor_match(p, 'intel')]
+            intel_candidates = intel_within_target or within_target
+            if build_priority == 'cost':
+                cpu_price_cap = _gaming_cost_cpu_price_cap(budget)
+                cpu_pool = [p for p in intel_candidates if p.price <= cpu_price_cap]
+                if not cpu_pool:
+                    cpu_pool = intel_candidates
+                # cost はコスパ順: 性能スコア / 価格
+                return sorted(
+                    cpu_pool,
+                    key=lambda p: (
+                        (_get_cpu_perf_score(p) or 0) / max(int(getattr(p, 'price', 0) or 0), 1),
+                        _get_cpu_perf_score(p) or 0,
+                        -(int(getattr(p, 'price', 0) or 0)),
+                    ),
+                    reverse=True,
+                )[0]
+            # spec は性能スコア順
+            return sorted(
+                intel_candidates,
+                key=lambda p: (
+                    _get_cpu_perf_score(p) or 0,
+                    -(int(getattr(p, 'price', 0) or 0)),
+                ),
+                reverse=True,
+            )[0]
         if part_type == 'cpu' and usage == 'creator':
             # クリエイター用途: コアスレッド数が多いCPUを優先選定
             # within_target が空の場合は candidates 全体から選定
@@ -2209,8 +2707,12 @@ def _pick_part_by_target(part_type, budget, usage, weights_override=None, option
                 return profiled
         if part_type == 'case':
             return _pick_case_candidate(within_target, case_fan_policy, build_priority, target_price=target_price)
+        if part_type == 'gpu' and usage == 'gaming':
+            low_end_gpu = _pick_gaming_low_end_gpu(within_target, budget, usage, build_priority)
+            if low_end_gpu:
+                return low_end_gpu
         if build_priority == 'cost':
-            return within_target[0]
+            return random.choice(within_target) if within_target else None
         if part_type == 'cpu_cooler':
             # creator 用途: 水冷またはツインタワー空冷を優先
             if usage == 'creator':
@@ -2235,13 +2737,26 @@ def _pick_part_by_target(part_type, budget, usage, weights_override=None, option
                 key=lambda p: (_cpu_cooler_profile_score(p, cooling_profile, cooler_type), p.price),
                 reverse=True,
             )[0]
-        return sorted(within_target, key=lambda p: p.price, reverse=True)[0]
+        sorted_candidates = sorted(within_target, key=lambda p: p.price, reverse=True)
+        return random.choice(sorted_candidates) if sorted_candidates else None
 
     if build_priority == 'cost':
         if part_type == 'cpu' and usage == 'gaming' and cpu_vendor != 'intel':
-            preferred_x3d = [p for p in candidates if _is_gaming_cpu_x3d_preferred(p)]
-            if preferred_x3d:
-                return preferred_x3d[0]
+            cpu_price_cap = _gaming_cost_cpu_price_cap(budget)
+            capped_candidates = [p for p in candidates if p.price <= cpu_price_cap]
+            cpu_pool = capped_candidates or candidates
+            preferred_x3d = [p for p in cpu_pool if _is_gaming_cpu_x3d_preferred(p)]
+            cpu_pool = preferred_x3d or cpu_pool
+            if cpu_pool:
+                return sorted(
+                    cpu_pool,
+                    key=lambda p: (
+                        _get_cpu_perf_score(p) or 0,
+                        _is_gaming_cpu_x3d_preferred(p),
+                        -p.price,
+                    ),
+                    reverse=True,
+                )[0]
         if part_type == 'cpu' and usage == 'creator':
             # クリエイター用途 + コスト重視: 8～24コア帯を優先
             picked_creator_cpu = _prefer_creator_cost_cpu_8_to_24_cores(candidates)
@@ -2261,7 +2776,9 @@ def _pick_part_by_target(part_type, budget, usage, weights_override=None, option
                 return profiled
         if part_type == 'case':
             return _pick_case_candidate(candidates, case_fan_policy, build_priority, target_price=target_price)
-        return candidates[0]
+        if part_type == 'gpu' and usage == 'gaming':
+            return None
+        return random.choice(candidates) if candidates else None
 
     if part_type == 'cpu_cooler':
         if build_priority == 'spec':
@@ -2303,7 +2820,24 @@ def _pick_part_by_target(part_type, budget, usage, weights_override=None, option
     if part_type == 'cpu' and usage == 'gaming' and cpu_vendor != 'intel':
         preferred_x3d = [p for p in candidates if _is_gaming_cpu_x3d_preferred(p)]
         if preferred_x3d:
-            return preferred_x3d[-1] if build_priority == 'spec' else preferred_x3d[0]
+            if build_priority == 'spec':
+                if budget < BUDGET_TIER_THRESHOLDS['low']:
+                    non_x3d_candidates = [p for p in candidates if not _is_gaming_cpu_x3d_preferred(p)]
+                    if non_x3d_candidates:
+                        minimum_perf_score = max(_minimum_gaming_cpu_perf_score(usage), 2500)
+                        value_candidates = [
+                            p
+                            for p in non_x3d_candidates
+                            if (_get_cpu_perf_score(p) or 0) >= minimum_perf_score
+                        ]
+                        cpu_pool = value_candidates or non_x3d_candidates
+                        return sorted(
+                            cpu_pool,
+                            key=lambda p: (p.price, -(_get_cpu_perf_score(p) or 0)),
+                        )[0]
+                return preferred_x3d[-1]
+            else:
+                return random.choice(preferred_x3d)
 
     if part_type == 'cpu' and usage == 'creator':
         # クリエイター用途: 目標価格を超えた候補からもコアスレッド数で優先
@@ -2332,8 +2866,274 @@ def _pick_part_by_target(part_type, budget, usage, weights_override=None, option
     if build_priority == 'spec':
         return candidates[-1]
 
-    return candidates[0]
+    if part_type == 'gpu' and usage == 'gaming' and build_priority == 'cost':
+        if auto_adjust_reference_budget is not None:
+            pick = _pick_gaming_cost_gpu_for_auto_adjust(candidates, auto_adjust_reference_budget)
+            if pick:
+                return pick
+        low_end_gpu = _pick_gaming_low_end_gpu(candidates, budget, usage, build_priority)
+        if low_end_gpu:
+            return low_end_gpu
+        cap_budget = int(auto_adjust_reference_budget) if auto_adjust_reference_budget else budget
+        gaming_cost_gpu_cap = int(cap_budget * 0.31)
+        non_excluded = [
+            p for p in candidates
+            if not _is_gaming_cost_excluded_gpu(p)
+            and not _is_gaming_creative_gpu(p)
+        ]
+        capped_candidates = [
+            p for p in non_excluded
+            if p.price <= gaming_cost_gpu_cap and _is_gaming_gpu_within_priority_cap(p, 'cost')
+        ]
+        if capped_candidates:
+            candidates = capped_candidates
+        elif non_excluded:
+            candidates = non_excluded
 
+    if not candidates:
+        return None
+
+    if (
+        usage == 'creator'
+        and part_type == 'gpu'
+        and budget >= CREATOR_FLAGSHIP_BUDGET_THRESHOLD
+    ):
+        # 予算上限75%以内で買えるGPUのうち、最上位価格を選ぶ。
+        # これにより、クリエイターの高予算ではGPUを積極的に上位化する。
+        upper_cap = int(budget * CREATOR_FLAGSHIP_GPU_BUDGET_CAP)
+        premium_candidates = [p for p in candidates if p.price <= upper_cap]
+        if premium_candidates:
+            return premium_candidates[-1]
+
+    weights = weights_override if weights_override is not None else USAGE_BUDGET_WEIGHTS[usage]
+    target_price = int(budget * weights.get(part_type, 0.1))
+    if part_type == 'cpu_cooler':
+        if cooling_profile == 'performance':
+            target_price = int(target_price * 1.3)
+        elif cooling_profile == 'silent':
+            target_price = int(target_price * 0.85)
+
+    within_target = [p for p in candidates if p.price <= target_price]
+    if within_target:
+        if part_type == 'gpu' and usage == 'gaming' and build_priority == 'spec':
+            picked_gpu = _pick_gaming_spec_gpu(within_target)
+            if picked_gpu:
+                return picked_gpu
+        if part_type == 'psu':
+            # PSU は過剰容量・過剰価格より、必要W数に近い候補を優先する。
+            return sorted(
+                within_target,
+                key=lambda p: _psu_selection_sort_key(p, required_psu_wattage),
+            )[0]
+        if part_type == 'cpu' and usage == 'gaming' and cpu_vendor != 'intel':
+            preferred_x3d = [p for p in within_target if _is_gaming_cpu_x3d_preferred(p)]
+            cpu_pool = preferred_x3d or within_target
+            return sorted(
+                cpu_pool,
+                key=lambda p: (
+                    _get_cpu_perf_score(p) or 0,
+                    _is_gaming_cpu_x3d_preferred(p),
+                    -p.price,
+                ),
+                reverse=True,
+            )[0]
+        if part_type == 'cpu' and usage == 'creator':
+            # クリエイター用途: コアスレッド数が多いCPUを優先選定
+            # within_target が空の場合は candidates 全体から選定
+            target_cpus = within_target if within_target else candidates
+            if build_priority == 'cost':
+                picked_creator_cpu = _prefer_creator_cost_cpu_8_to_24_cores(target_cpus)
+            else:
+                picked_creator_cpu = _prefer_creator_cpu_by_core_threads(target_cpus)
+            if picked_creator_cpu:
+                return picked_creator_cpu
+        if part_type == 'memory':
+            # gaming + spec はGPU優先のため、メモリは目標価格内から選ぶ。
+            # それ以外の spec では、候補全体から上位メモリを選んでもよい。
+            if build_priority == 'spec' and usage != 'gaming':
+                memory_pool = candidates
+            else:
+                memory_pool = within_target
+            profiled = _memory_profile_pick(memory_pool, build_priority, budget=budget, usage=usage, options=options)
+            if usage == 'creator':
+                min_capacity_candidates = [p for p in candidates if _infer_memory_capacity_gb(p) >= 16]
+                if min_capacity_candidates:
+                    candidates = min_capacity_candidates
+            if profiled:
+                return profiled
+        if part_type == 'motherboard':
+            motherboard_pool = candidates if usage == 'gaming' and build_priority == 'spec' else within_target
+            picked_mb = _pick_motherboard_candidate(motherboard_pool, build_priority, usage, target_price=target_price)
+            if picked_mb:
+                return picked_mb
+        if part_type == 'storage':
+            # スペック重視では目標価格内の安価HDDに固定されやすいため、
+            # 候補全体からSSD/NVMe優先で選ぶ。
+            storage_pool = candidates if build_priority == 'spec' else within_target
+            profiled = _storage_profile_pick(storage_pool, build_priority, storage_preference)
+            if profiled:
+                return profiled
+        if part_type == 'case':
+            return _pick_case_candidate(within_target, case_fan_policy, build_priority, target_price=target_price)
+        if part_type == 'gpu' and usage == 'gaming' and build_priority == 'cost':
+            non_excluded = [
+                p for p in within_target
+                if not _is_gaming_cost_excluded_gpu(p)
+                and not _is_gaming_creative_gpu(p)
+            ]
+            if non_excluded:
+                return sorted(non_excluded, key=lambda p: (p.price, -_infer_gaming_gpu_perf_score(p)))[0]
+        if build_priority == 'cost':
+            return within_target[0]
+        if part_type == 'cpu_cooler':
+            # creator 用途: 水冷またはツインタワー空冷を優先
+            if usage == 'creator':
+                # 水冷クーラーを最優先
+                liquid_coolers = [p for p in within_target if _is_liquid_cooler(p)]
+                if liquid_coolers:
+                    return sorted(
+                        liquid_coolers,
+                        key=lambda p: (_cpu_cooler_profile_score(p, cooling_profile, cooler_type), p.price),
+                        reverse=True,
+                    )[0]
+                # 水冷がなければツインタワー空冷を優先
+                dual_tower_coolers = [p for p in within_target if _is_dual_tower_cooler(p)]
+                if dual_tower_coolers:
+                    return sorted(
+                        dual_tower_coolers,
+                        key=lambda p: (_cpu_cooler_profile_score(p, cooling_profile, cooler_type), p.price),
+                        reverse=True,
+                    )[0]
+            return sorted(
+                within_target,
+                key=lambda p: (_cpu_cooler_profile_score(p, cooling_profile, cooler_type), p.price),
+                reverse=True,
+            )[0]
+        sorted_candidates = sorted(within_target, key=lambda p: p.price, reverse=True)
+        return random.choice(sorted_candidates) if sorted_candidates else None
+
+    if build_priority == 'cost':
+        if part_type == 'cpu' and usage == 'gaming' and cpu_vendor != 'intel':
+            preferred_x3d = [p for p in candidates if _is_gaming_cpu_x3d_preferred(p)]
+            cpu_pool = preferred_x3d or candidates
+            if cpu_pool:
+                return sorted(
+                    cpu_pool,
+                    key=lambda p: (
+                        _get_cpu_perf_score(p) or 0,
+                        _is_gaming_cpu_x3d_preferred(p),
+                        -p.price,
+                    ),
+                    reverse=True,
+                )[0]
+        if part_type == 'cpu' and usage == 'creator':
+            # クリエイター用途 + コスト重視: 8～24コア帯を優先
+            picked_creator_cpu = _prefer_creator_cost_cpu_8_to_24_cores(candidates)
+            if picked_creator_cpu:
+                return picked_creator_cpu
+        if part_type == 'memory':
+            profiled = _memory_profile_pick(candidates, build_priority, budget=budget, usage=usage, options=options)
+            if profiled:
+                return profiled
+        if part_type == 'motherboard':
+            picked_mb = _pick_motherboard_candidate(candidates, build_priority, usage, target_price=target_price)
+            if picked_mb:
+                return picked_mb
+        if part_type == 'storage':
+            profiled = _storage_profile_pick(candidates, build_priority, storage_preference)
+            if profiled:
+                return profiled
+        if part_type == 'case':
+            return _pick_case_candidate(candidates, case_fan_policy, build_priority, target_price=target_price)
+        if part_type == 'gpu' and usage == 'gaming':
+            low_end_gpu = _pick_gaming_low_end_gpu(candidates, budget, usage, build_priority)
+            if low_end_gpu:
+                return low_end_gpu
+        return None
+
+    if part_type == 'cpu_cooler':
+        if build_priority == 'spec':
+            return sorted(
+                candidates,
+                key=lambda p: (_cpu_cooler_profile_score(p, cooling_profile, cooler_type), p.price),
+                reverse=True,
+            )[0]
+        return sorted(
+            candidates,
+            key=lambda p: (_cpu_cooler_profile_score(p, cooling_profile, cooler_type), -p.price),
+            reverse=True,
+        )[0]
+
+    if part_type == 'case':
+        return _pick_case_candidate(candidates, case_fan_policy, build_priority, target_price=target_price)
+
+    if part_type == 'motherboard':
+        picked_mb = _pick_motherboard_candidate(candidates, build_priority, usage, target_price=target_price)
+        if picked_mb:
+            return picked_mb
+
+    if part_type == 'psu':
+        return sorted(
+            candidates,
+            key=lambda p: _psu_selection_sort_key(p, required_psu_wattage),
+        )[0]
+
+    if part_type == 'memory' and build_priority == 'spec':
+        profiled = _memory_profile_pick(candidates, build_priority, budget=budget, usage=usage, options=options)
+        if profiled:
+            return profiled
+
+    if part_type == 'storage':
+        profiled = _storage_profile_pick(candidates, build_priority, storage_preference)
+        if profiled:
+            return profiled
+
+    if part_type == 'cpu' and usage == 'gaming':
+        # ゲーミングCPU: Intel限定
+        intel_candidates = [p for p in candidates if _is_cpu_vendor_match(p, 'intel')]
+        if not intel_candidates:
+            return None
+        if build_priority == 'cost':
+            # cost はコスパ順: 性能スコア / 価格
+            return sorted(
+                intel_candidates,
+                key=lambda p: (
+                    (_get_cpu_perf_score(p) or 0) / max(int(getattr(p, 'price', 0) or 0), 1),
+                    _get_cpu_perf_score(p) or 0,
+                    -(int(getattr(p, 'price', 0) or 0)),
+                ),
+                reverse=True,
+            )[0]
+        # spec は性能スコア順
+        return sorted(
+            intel_candidates,
+            key=lambda p: (
+                _get_cpu_perf_score(p) or 0,
+                -(int(getattr(p, 'price', 0) or 0)),
+            ),
+            reverse=True,
+        )[0]
+
+    if part_type == 'cpu' and usage == 'creator':
+        # クリエイター用途: 目標価格を超えた候補からもコアスレッド数で優先
+        # 注: クーラー条件によって候補が制限されている場合でも、creator CPU ロジックを適用
+        if build_priority == 'cost':
+            picked_creator_cpu = _prefer_creator_cost_cpu_8_to_24_cores(candidates)
+        else:
+            picked_creator_cpu = _prefer_creator_cpu_by_core_threads(candidates)
+        if picked_creator_cpu:
+            return picked_creator_cpu
+        # それでも candidates が空の場合は、制限を緩和して再試行
+        # (例: 空冷・水冷のどちらでも互換性のある CPU から選定)
+        if not candidates and part_type == 'cpu':
+            # cooler_type と radiator_size を無視して全 CPU 候補から選定
+            all_creator_cpus = PCPart.objects.filter(part_type='cpu').order_by('price')
+            if all_creator_cpus:
+                if build_priority == 'cost':
+                    return _prefer_creator_cost_cpu_8_to_24_cores(list(all_creator_cpus))
+                return _prefer_creator_cpu_by_core_threads(list(all_creator_cpus))
+
+    return None
 
 def _get_spec(part, key, default=None):
     if not part:
@@ -2489,6 +3289,10 @@ def _target_memory_profile(budget, usage, options=None):
             if budget >= 280000:
                 return {'capacity_gb': 32, 'preferred_modules': 2}
             return {'capacity_gb': 16, 'preferred_modules': 1}
+        if build_priority == 'cost':
+            if budget >= 160000:
+                return {'capacity_gb': 16, 'preferred_modules': 1}
+            return {'capacity_gb': 8, 'preferred_modules': 1}
         if budget >= 400000:
             return {'capacity_gb': 32, 'preferred_modules': 2}
         if budget >= 220000:
@@ -2570,6 +3374,19 @@ def _memory_profile_pick(candidates, build_priority, budget=None, usage=None, op
         )[0]
 
     if build_priority == 'spec':
+        current_usage = usage or options.get('usage', 'standard')
+        if current_usage == 'gaming':
+            return sorted(
+                candidates,
+                key=lambda p: (
+                    _capacity_gb(p) < target_capacity,
+                    _infer_memory_speed_mhz(p) < int(min_memory_speed_mhz or 0),
+                    abs(_capacity_gb(p) - target_capacity),
+                    _module_count(p) != preferred_modules,
+                    p.price,
+                    _normalized_memory_type(p) != 'DDR5',
+                ),
+            )[0]
         # スペック重視: DDR5優先 + 予算帯ごとの容量/枚数ルール優先
         return sorted(
             candidates,
@@ -2846,8 +3663,31 @@ def _compatibility_issues(selected_parts, usage, options=None):
     return issues
 
 
-def _pick_candidate(part_type, predicate):
-    for candidate in PCPart.objects.filter(part_type=part_type).order_by('price'):
+def _pick_candidate(part_type, predicate, usage=None, options=None):
+    """部品候補を条件に基づいて選定する。CPUの場合、gaming用途では2000以下を除外"""
+    options = options or {}
+    candidates = PCPart.objects.filter(part_type=part_type).order_by('price')
+    require_gaming_x3d_cpu = options.get('require_gaming_x3d_cpu', False)
+    
+    # gaming 用途: 性能目安表スコアが 2000 以下の CPU を除外
+    if part_type == 'cpu' and usage == 'gaming':
+        if require_gaming_x3d_cpu:
+            candidates = [p for p in candidates if _is_gaming_cpu_x3d_preferred(p)]
+        minimum_perf_score = _minimum_gaming_cpu_perf_score(usage)
+        if minimum_perf_score > 0 and not require_gaming_x3d_cpu:
+            perf_filtered = [
+                p for p in candidates
+                if (
+                    _is_gaming_cpu_x3d_preferred(p)
+                    or (_get_cpu_perf_score(p) is not None and _get_cpu_perf_score(p) > minimum_perf_score)
+                )
+            ]
+            if perf_filtered:
+                candidates = perf_filtered
+            else:
+                candidates = []
+    
+    for candidate in candidates:
         if _is_part_suitable(part_type, candidate) and predicate(candidate):
             return candidate
     return None
@@ -2891,14 +3731,33 @@ def _matches_selection_options(part_type, part, options=None):
         return True
 
     if part_type == 'cpu':
+        # ゲーミング用途は Intel CPU のみを使用
+        if usage == 'gaming' and not _is_cpu_vendor_match(part, 'intel'):
+            return False
+        
+        if usage == 'gaming' and require_gaming_x3d_cpu and not _is_gaming_cpu_x3d_preferred(part):
+            return False
+        if usage == 'gaming' and not require_gaming_x3d_cpu:
+            if _is_gaming_cpu_x3d_preferred(part):
+                return _is_cpu_vendor_match(part, cpu_vendor)
+            minimum_perf_score = _minimum_gaming_cpu_perf_score(usage)
+            if minimum_perf_score > 0:
+                score = _get_cpu_perf_score(part)
+                if score is None or score <= minimum_perf_score:
+                    return False
         if usage == 'creator' and not _cpu_meets_creator_minimum(part, min_cores=8, min_threads=16):
             return False
         return _is_cpu_vendor_match(part, cpu_vendor)
 
     if part_type == 'gpu':
-        if require_preferred_gaming_gpu and not _is_gaming_spec_gpu_preferred(part, minimum_gaming_gpu_tier):
+        if usage == 'gaming' and _is_gaming_creative_gpu(part):
             return False
-        if usage == 'gaming' and require_gaming_x3d_cpu and not _is_gaming_cpu_x3d_preferred(part):
+        if usage == 'gaming' and not _is_gaming_gpu_within_priority_cap(part, options.get('build_priority', 'balanced')):
+            return False
+        gaming_gpu_policy = _gaming_low_end_gpu_policy(options.get('budget', 0), usage, options.get('build_priority', 'balanced'))
+        if gaming_gpu_policy and int(getattr(part, 'price', 0) or 0) > int(gaming_gpu_policy['price_cap']):
+            return False
+        if require_preferred_gaming_gpu and not _is_gaming_spec_gpu_preferred(part, minimum_gaming_gpu_tier):
             return False
         return not _is_gt_series_gpu(part)
 
@@ -2992,7 +3851,7 @@ def _resolve_compatibility(selected_parts, usage, options=None):
                     selected_parts['motherboard'] = new_mb
                     replaced = True
             if not replaced and mb_socket:
-                new_cpu = _pick_candidate('cpu', lambda p: _get_spec(p, 'socket') == mb_socket)
+                new_cpu = _pick_candidate('cpu', lambda p: _get_spec(p, 'socket') == mb_socket, usage=usage, options=options)
                 if new_cpu:
                     selected_parts['cpu'] = new_cpu
                     replaced = True
@@ -3117,7 +3976,20 @@ def _downgrade_selected_parts(selected_parts, total_price, budget, options=None)
         return selected_parts, total_price
 
     options = options or {}
-    protect_x3d_cpu = options.get('usage') == 'gaming' and options.get('build_priority') == 'spec'
+    protect_x3d_cpu = (
+        options.get('usage') == 'gaming'
+        and (
+            options.get('build_priority') == 'spec'
+            or options.get('require_gaming_x3d_cpu', False)
+        )
+    )
+    
+    # ローエンド gaming/cost では GPU を下限の low-end policy で保護
+    protect_low_end_gpu = (
+        options.get('usage') == 'gaming'
+        and options.get('build_priority') == 'cost'
+        and options.get('budget') < BUDGET_TIER_THRESHOLDS['low']
+    )
 
     changed = True
     while changed and total_price > budget:
@@ -3126,6 +3998,9 @@ def _downgrade_selected_parts(selected_parts, total_price, budget, options=None)
             if current is None:
                 continue
             if protect_x3d_cpu and part_type == 'cpu' and _is_gaming_cpu_x3d_preferred(current):
+                continue
+            # ローエンド gaming/cost では GPU を absolutely 保護（downgrade しない）
+            if protect_low_end_gpu and part_type == 'gpu':
                 continue
 
             build_priority = options.get('build_priority', 'balanced')
@@ -3162,13 +4037,25 @@ def _downgrade_selected_parts(selected_parts, total_price, budget, options=None)
     return selected_parts, total_price
 
 
-def _drop_until_budget(selected_parts, total_price, budget):
+def _drop_until_budget(selected_parts, total_price, budget, options=None):
     if total_price <= budget:
         return selected_parts, total_price
+
+    options = options or {}
+    protect_x3d_cpu = options.get('usage') == 'gaming' and options.get('require_gaming_x3d_cpu', False)
+    protect_low_end_gpu = (
+        options.get('usage') == 'gaming'
+        and options.get('build_priority') == 'cost'
+        and options.get('budget', 0) < BUDGET_TIER_THRESHOLDS['low']
+    )
 
     for part_type in CATEGORY_DROP_PRIORITY:
         part = selected_parts.get(part_type)
         if part is None:
+            continue
+        if protect_x3d_cpu and part_type == 'cpu' and _is_gaming_cpu_x3d_preferred(part):
+            continue
+        if protect_low_end_gpu and part_type == 'gpu':
             continue
         selected_parts[part_type] = None
         total_price -= part.price
@@ -3303,13 +4190,33 @@ def _upgrade_parts_with_surplus(selected_parts, total_price, budget, usage, opti
                 if capped_candidates:
                     better_candidates = capped_candidates
             if part_type == 'gpu' and usage == 'gaming' and build_priority == 'cost':
-                # gaming + cost は spec と同価格帯まで上げ切らない。
-                # 価格差を保ちながら予算未消化だけを抑える。
+                # gaming + cost は low-end では 3050 クラス前後に留める。
                 cap_budget = int(options.get('auto_adjust_reference_budget') or budget)
                 gaming_cost_gpu_cap = int(cap_budget * 0.31)
-                capped_candidates = [c for c in better_candidates if c.price <= gaming_cost_gpu_cap]
-                if capped_candidates:
-                    better_candidates = capped_candidates
+                low_end_policy = _gaming_low_end_gpu_policy(budget, usage, build_priority)
+                if low_end_policy:
+                    target_price = int(low_end_policy['target_price'])
+                    low_end_candidates = [
+                        c for c in better_candidates
+                        if not _is_gaming_cost_excluded_gpu(c)
+                        and not _is_gaming_creative_gpu(c)
+                        and c.price <= target_price
+                    ]
+                    if low_end_candidates:
+                        better_candidates = low_end_candidates
+                    else:
+                        continue
+                else:
+                    non_excluded_candidates = [
+                        c for c in better_candidates
+                        if not _is_gaming_cost_excluded_gpu(c)
+                        and not _is_gaming_creative_gpu(c)
+                    ]
+                    capped_candidates = [c for c in non_excluded_candidates if c.price <= gaming_cost_gpu_cap]
+                    if capped_candidates:
+                        better_candidates = capped_candidates
+                    elif non_excluded_candidates:
+                        better_candidates = non_excluded_candidates
             if part_type == 'cpu' and usage == 'creator':
                 better_candidates = [c for c in better_candidates if not _is_cpu_x3d(c)]
             better = None
@@ -3325,7 +4232,22 @@ def _upgrade_parts_with_surplus(selected_parts, total_price, budget, usage, opti
                     minimum_tier = options.get('minimum_gaming_gpu_tier', 1)
                     preferred_gpu = [c for c in better_candidates if _is_gaming_spec_gpu_preferred(c, minimum_tier)]
                     gpu_pool = preferred_gpu or better_candidates
-                    gpu_pool = _prefer_rx_xt_value_candidates(gpu_pool)
+                    low_end_policy = _gaming_low_end_gpu_policy(budget, usage, build_priority)
+                    if low_end_policy:
+                        target_price = int(low_end_policy['target_price'])
+                        gpu_pool = [c for c in gpu_pool if c.price <= int(low_end_policy['price_cap'])]
+                        if not gpu_pool:
+                            continue
+                        gpu_pool = sorted(
+                            gpu_pool,
+                            key=lambda c: (
+                                abs(int(c.price) - target_price),
+                                -_infer_gaming_gpu_perf_score(c),
+                                c.price,
+                            ),
+                        )
+                    else:
+                        gpu_pool = _prefer_rx_xt_value_candidates(gpu_pool)
                     better = gpu_pool[0]
                 else:
                     better = better_candidates[0]
@@ -3624,8 +4546,21 @@ def _enforce_gaming_spec_best_value_gpu(selected_parts, budget, usage, options=N
 
 def _enforce_gaming_spec_prefers_x3d_cpu(selected_parts, budget, usage, options=None):
     options = options or {}
-    if usage != 'gaming' or options.get('build_priority') != 'spec':
+    if usage != 'gaming':
         return selected_parts
+
+    build_priority = options.get('build_priority')
+    if build_priority not in {'spec', 'cost'}:
+        return selected_parts
+    if build_priority == 'spec' and budget < BUDGET_TIER_THRESHOLDS['low']:
+        return selected_parts
+    if build_priority == 'cost':
+        # 自動調整中は昇格ロジックを重ねない。
+        if options.get('auto_adjust_reference_budget') is not None:
+            return selected_parts
+        # ある程度の余剰があるケースのみ X3D へ寄せる。
+        if _sum_selected_price(selected_parts) >= int(budget * 0.88):
+            return selected_parts
 
     cpu = selected_parts.get('cpu')
     if not cpu:
@@ -3633,12 +4568,15 @@ def _enforce_gaming_spec_prefers_x3d_cpu(selected_parts, budget, usage, options=
     if _is_gaming_cpu_x3d_preferred(cpu):
         return selected_parts
 
+    cpu_price_cap = _gaming_cost_cpu_price_cap(budget)
+
     x3d_candidates = [
         p
         for p in PCPart.objects.filter(part_type='cpu').order_by('price')
         if _is_part_suitable('cpu', p)
         and _is_gaming_cpu_x3d_preferred(p)
         and _matches_selection_options('cpu', p, options=options)
+        and p.price <= cpu_price_cap
     ]
     if not x3d_candidates:
         return selected_parts
@@ -3647,7 +4585,7 @@ def _enforce_gaming_spec_prefers_x3d_cpu(selected_parts, budget, usage, options=
     affordable = [candidate for candidate in x3d_candidates if total_without_cpu + candidate.price <= budget]
     if affordable:
         adjusted = dict(selected_parts)
-        adjusted['cpu'] = affordable[-1]
+        adjusted['cpu'] = affordable[-1] if build_priority == 'spec' else affordable[0]
         return _resolve_compatibility(adjusted, usage, options=options)
 
     trial = dict(selected_parts)
@@ -3658,6 +4596,47 @@ def _enforce_gaming_spec_prefers_x3d_cpu(selected_parts, budget, usage, options=
     if trial_total <= budget and _is_gaming_cpu_x3d_preferred(trial.get('cpu')):
         return trial
 
+    return selected_parts
+
+
+def _enforce_gaming_cost_gpu_policy(selected_parts, budget, usage, options=None):
+    options = options or {}
+    if usage != 'gaming' or options.get('build_priority') != 'cost':
+        return selected_parts
+
+    current_gpu = selected_parts.get('gpu')
+    if not current_gpu or (not _is_gaming_cost_excluded_gpu(current_gpu) and not _is_gaming_creative_gpu(current_gpu)):
+        return selected_parts
+
+    candidates = [
+        p
+        for p in PCPart.objects.filter(part_type='gpu').order_by('price')
+        if _is_part_suitable('gpu', p)
+        and not _is_gt_series_gpu(p)
+        and not _is_gaming_cost_excluded_gpu(p)
+        and not _is_gaming_creative_gpu(p)
+        and _matches_selection_options('gpu', p, options=options)
+    ]
+    if not candidates:
+        return selected_parts
+
+    current_total = _sum_selected_price(selected_parts)
+    sorted_candidates = sorted(
+        candidates,
+        key=lambda p: (
+            p.price,
+            -_infer_gaming_gpu_perf_score(p),
+        ),
+    )
+    for candidate in sorted_candidates:
+        trial = dict(selected_parts)
+        trial['gpu'] = candidate
+        trial = _resolve_compatibility(trial, usage, options=options)
+        trial_total = _sum_selected_price(trial)
+        if trial_total <= budget:
+            return trial
+
+    # 候補はあるが予算内で置換できない場合は現状維持。
     return selected_parts
 
 
@@ -4467,6 +5446,7 @@ def _prefer_higher_gaming_cost_x3d_cpu(selected_parts, budget, usage, options=No
     # X3D CPU 候補を取得（現在の CPU より高価、かつ premium ではない）
     if _is_gaming_cpu_x3d_preferred(current_cpu):
         # 既に X3D: さらに高い X3D CPU を探す
+        cpu_price_cap = _gaming_cost_cpu_price_cap(budget)
         upgrade_candidates = [
             part
             for part in PCPart.objects.filter(part_type='cpu', price__gt=current_cpu.price).order_by('-price')
@@ -4474,10 +5454,12 @@ def _prefer_higher_gaming_cost_x3d_cpu(selected_parts, budget, usage, options=No
             and _matches_selection_options('cpu', part, options=options)
             and _is_gaming_cpu_x3d_preferred(part)
             and not _is_premium_gaming_cpu_for_cost_build(part, budget)
+            and part.price <= cpu_price_cap
         ]
     else:
         # 非 X3D: 予算比率の固定上限ではなく、後段の合計金額判定で可否を判断する。
         # これにより、全体予算に余剰があるケースで X3D 候補を取りこぼさない。
+        cpu_price_cap = _gaming_cost_cpu_price_cap(budget)
         upgrade_candidates = [
             part
             for part in PCPart.objects.filter(part_type='cpu', price__gt=current_cpu.price).order_by('-price')
@@ -4485,6 +5467,7 @@ def _prefer_higher_gaming_cost_x3d_cpu(selected_parts, budget, usage, options=No
             and _matches_selection_options('cpu', part, options=options)
             and _is_gaming_cpu_x3d_preferred(part)
             and not _is_premium_gaming_cpu_for_cost_build(part, budget)
+            and part.price <= cpu_price_cap
         ]
     
     if not upgrade_candidates:
@@ -4607,6 +5590,7 @@ def build_configuration_response(
     persist=True,
     auto_adjust_reference_budget=None,
     require_gaming_x3d_cpu=False,
+    duplicate_retry_count=0,
 ):
     if not isinstance(budget, int) or budget < 50000 or budget > 1500000:
         return None, Response({'detail': 'budgetは50,000円以上1,500,000円以下で入力してください'}, status=status.HTTP_400_BAD_REQUEST)
@@ -4628,10 +5612,15 @@ def build_configuration_response(
         max_motherboard_chipset=max_motherboard_chipset,
     )
     selection_options['usage'] = usage
+    selection_options['budget'] = budget
     selection_options['os_edition'] = _resolve_os_edition_by_usage(usage, selection_options['os_edition'])
     selection_options['minimum_gaming_gpu_perf_score'] = _minimum_gaming_low_end_gpu_perf_score(budget, usage)
     if auto_adjust_reference_budget is not None:
         selection_options['auto_adjust_reference_budget'] = int(auto_adjust_reference_budget)
+    # ローエンド gaming/cost では X3D CPU を優先（強制ではなく prefer）
+    # GPU(RTX 3050) 予算を圧迫しすぎないよう、X3D 強制は避け、prefer にとどめる
+    if usage == 'gaming' and selection_options.get('build_priority') == 'cost' and budget < BUDGET_TIER_THRESHOLDS['low']:
+        pass  # X3D 強制ではなく、_prefer_higher_gaming_cost_x3d_cpu の後段処理で prefer する
     if require_gaming_x3d_cpu:
         selection_options['require_gaming_x3d_cpu'] = True
 
@@ -4774,7 +5763,12 @@ def build_configuration_response(
     )
     total_price = _sum_selected_price(selected_parts)
 
-    selected_parts, total_price = _drop_until_budget(selected_parts, total_price, budget)
+    selected_parts, total_price = _drop_until_budget(
+        selected_parts,
+        total_price,
+        budget,
+        options=selection_options,
+    )
     selection_options = _refresh_selection_options_with_selected_parts(selection_options, selected_parts)
 
     selected_parts = _rebalance_gaming_spec_gpu_memory(
@@ -4889,6 +5883,16 @@ def build_configuration_response(
     total_price = _sum_selected_price(selected_parts)
 
     selected_parts = _rightsize_motherboard_for_gaming_spec(
+        selected_parts,
+        budget,
+        usage,
+        options=selection_options,
+    )
+    selected_parts = _resolve_compatibility(selected_parts, usage, options=selection_options)
+    selection_options = _refresh_selection_options_with_selected_parts(selection_options, selected_parts)
+    total_price = _sum_selected_price(selected_parts)
+
+    selected_parts = _enforce_gaming_cost_gpu_policy(
         selected_parts,
         budget,
         usage,
@@ -5028,11 +6032,20 @@ def build_configuration_response(
     budget_auto_adjusted = False
     recommended_budget_min_for_x3d = None
 
-    should_enforce_gaming_x3d = enforce_gaming_x3d and usage == 'gaming' and not _is_low_end_gaming_budget(budget, usage)
+    should_enforce_gaming_x3d = (
+        enforce_gaming_x3d
+        and usage == 'gaming'
+        and not _is_low_end_gaming_budget(budget, usage)
+    )
 
     if should_enforce_gaming_x3d:
         selected_cpu = selected_parts.get('cpu')
         if not _is_gaming_cpu_x3d_preferred(selected_cpu):
+            low_end_uplift_budget = _recommend_min_budget_for_gaming_x3d_from_low_end_config(
+                selected_parts,
+                budget,
+                usage,
+            )
             recommended_budget_min_for_x3d = _recommend_min_budget_for_gaming_x3d(
                 budget,
                 usage,
@@ -5052,9 +6065,15 @@ def build_configuration_response(
                 max_motherboard_chipset,
             )
 
+            probe_budgets = []
+            if low_end_uplift_budget and low_end_uplift_budget > budget:
+                probe_budgets.append((low_end_uplift_budget, True))
             if recommended_budget_min_for_x3d and recommended_budget_min_for_x3d > budget:
+                probe_budgets.append((recommended_budget_min_for_x3d, False))
+
+            for probe_budget, is_low_end_uplift in probe_budgets:
                 adjusted_response, adjusted_error = build_configuration_response(
-                    recommended_budget_min_for_x3d,
+                    probe_budget,
                     usage,
                     cooler_type,
                     radiator_size,
@@ -5076,22 +6095,27 @@ def build_configuration_response(
                     require_gaming_x3d_cpu=True,
                 )
                 if adjusted_error:
-                    return None, adjusted_error
+                    continue
                 if _response_has_gaming_x3d_cpu(adjusted_response):
                     adjusted_response['requested_budget'] = requested_budget
                     adjusted_response['budget_auto_adjusted'] = True
-                    adjusted_response['recommended_budget_min_for_x3d'] = recommended_budget_min_for_x3d
+                    adjusted_response['recommended_budget_min_for_x3d'] = probe_budget
                     adjusted_response['x3d_enforced'] = True
-                    adjusted_response['message'] = (
-                        f"X3D CPUを必須にするため、推奨予算を¥{recommended_budget_min_for_x3d:,}へ自動調整しました。"
-                    )
+                    if is_low_end_uplift:
+                        adjusted_response['message'] = (
+                            f"以前ローエンドに採用した構成を基準に、X3D CPU必須のため予算を¥{probe_budget:,}へ引き上げました。"
+                        )
+                    else:
+                        adjusted_response['message'] = (
+                            f"X3D CPUを必須にするため、推奨予算を¥{probe_budget:,}へ自動調整しました。"
+                        )
                     return adjusted_response, None
 
             detail = 'ゲーミングPCではX3D CPUが必須です。現在の予算ではX3D構成を組めません。'
             payload = {
                 'detail': detail,
                 'x3d_required': True,
-                'recommended_budget_min_for_x3d': recommended_budget_min_for_x3d,
+                'recommended_budget_min_for_x3d': recommended_budget_min_for_x3d or low_end_uplift_budget,
             }
             return None, Response(payload, status=status.HTTP_400_BAD_REQUEST)
 
@@ -5135,8 +6159,11 @@ def build_configuration_response(
     estimated_power = _estimate_system_power_w({**selected_parts, **extra_storage_parts}, usage)
     selected_gpu_perf_score = 0
     selected_gpu = selected_parts.get('gpu')
+    selected_gpu_gaming_tier_label = ''
     if selected_gpu:
         selected_gpu_perf_score = _infer_gpu_perf_score_for_requirement(selected_gpu)
+        if usage == 'gaming':
+            selected_gpu_gaming_tier_label = _infer_gaming_gpu_tier_label(selected_gpu)
 
     # creator + (cost or spec): GPU選定を復元
     if creator_gpu_fixed:
@@ -5157,6 +6184,40 @@ def build_configuration_response(
 
     configuration = None
     if persist:
+        if duplicate_retry_count < 2:
+            latest_config = Configuration.objects.filter(is_deleted=False).order_by('-created_at', '-id').first()
+            if _has_same_configuration_signature(
+                latest_config,
+                usage,
+                budget,
+                selected_parts,
+                extra_storage_parts,
+                use_igpu,
+            ):
+                return build_configuration_response(
+                    budget,
+                    usage,
+                    cooler_type,
+                    radiator_size,
+                    cooling_profile,
+                    case_size,
+                    case_fan_policy,
+                    cpu_vendor,
+                    build_priority,
+                    storage_preference,
+                    storage2_part_id,
+                    storage3_part_id,
+                    os_edition,
+                    custom_budget_weights,
+                    min_storage_capacity_gb,
+                    max_motherboard_chipset,
+                    enforce_gaming_x3d=enforce_gaming_x3d,
+                    persist=persist,
+                    auto_adjust_reference_budget=auto_adjust_reference_budget,
+                    require_gaming_x3d_cpu=require_gaming_x3d_cpu,
+                    duplicate_retry_count=duplicate_retry_count + 1,
+                )
+
         configuration = Configuration.objects.create(
             budget=budget,
             usage=usage,
@@ -5208,6 +6269,7 @@ def build_configuration_response(
         'x3d_enforced': bool(should_enforce_gaming_x3d),
         'minimum_gaming_gpu_perf_score': int(selection_options.get('minimum_gaming_gpu_perf_score') or 0),
         'selected_gpu_perf_score': int(selected_gpu_perf_score or 0),
+        'selected_gpu_gaming_tier_label': selected_gpu_gaming_tier_label,
         'configuration_id': configuration.id if configuration else None,
         'total_price': total_price,
         'estimated_power_w': estimated_power,
@@ -5486,19 +6548,31 @@ class GpuPerformanceCompareAPIView(APIView):
         if not requested_models:
             return Response({'detail': 'models query parameter or models body is required.'}, status=status.HTTP_400_BAD_REQUEST)
 
+        requested_model_keys = {
+            _normalize_gpu_model_key(model): model
+            for model in requested_models
+            if _normalize_gpu_model_key(model)
+        }
+
         entries = GPUPerformanceEntry.objects.filter(
             snapshot=latest,
             is_laptop=False,
-            model_key__in=requested_models,
         ).order_by('-perf_score', 'gpu_name')
 
         results = []
-        matched_models = set()
+        matched_requested_keys = set()
         for entry in entries:
-            matched_models.add(entry.model_key)
+            normalized_entry_key = _normalize_gpu_model_key(entry.model_key)
+            if normalized_entry_key not in requested_model_keys:
+                continue
+            matched_requested_keys.add(normalized_entry_key)
             results.append(_serialize_gpu_performance_entry(entry))
 
-        missing_models = [model for model in requested_models if model not in matched_models]
+        missing_models = [
+            model
+            for model in requested_models
+            if _normalize_gpu_model_key(model) not in matched_requested_keys
+        ]
 
         return Response(
             {
@@ -5517,12 +6591,106 @@ class GpuPerformanceCompareAPIView(APIView):
 
 
 def _serialize_cpu_selection_entry(entry):
+    price = entry.get('price')
+    perf_score = int(entry.get('perf_score', 0) or 0)
+    price_value = int(price or 0) if price is not None else 0
+    value_score = (perf_score / price_value) if price_value > 0 and perf_score > 0 else None
     return {
         'vendor': entry.get('vendor', ''),
         'model_name': entry.get('model_name', ''),
-        'perf_score': int(entry.get('perf_score', 0) or 0),
+        'perf_score': perf_score,
+        'price': price_value if price is not None else None,
+        'value_score': value_score,
         'source_url': entry.get('source_url', ''),
     }
+
+
+def _load_available_cpu_inventory_parts():
+    return list(PCPart.objects.filter(part_type='cpu', is_active=True).order_by('price'))
+
+
+def _match_available_cpu_part(model_name, inventory_parts=None):
+    inventory_parts = inventory_parts or _load_available_cpu_inventory_parts()
+    normalized_model = _normalize_cpu_model_query(model_name)
+    if not normalized_model:
+        return None
+
+    matches = []
+    for part in inventory_parts:
+        normalized_part_name = _normalize_cpu_model_query(part.name)
+        extracted_part_name = _extract_cpu_model_key_for_perf(part.name) or ''
+        normalized_extracted = _normalize_cpu_model_query(extracted_part_name)
+        candidate_keys = [normalized_part_name, normalized_extracted]
+        if any(
+            normalized_model == candidate_key
+            or normalized_model in candidate_key
+            or candidate_key in normalized_model
+            for candidate_key in candidate_keys
+            if candidate_key
+        ):
+            matches.append(part)
+
+    if not matches:
+        return None
+
+    return sorted(matches, key=lambda part: int(part.price or 0))[0]
+
+
+def _store_cpu_selection_snapshot(data):
+    entries = data.get('entries', []) or []
+    snapshot = CPUSelectionSnapshot.objects.create(
+        source_name=data.get('source_name', 'dospara_cpu_comparison_pages'),
+        source_urls=data.get('source_urls', []) or [],
+        exclude_intel_13_14=bool(data.get('exclude_intel_13_14', True)),
+        entry_count=int(data.get('entry_count', len(entries)) or len(entries)),
+        excluded_count=int(data.get('excluded_count', 0) or 0),
+        parser_version=str(data.get('parser_version', 'v1') or 'v1'),
+        fetched_at=timezone.now(),
+    )
+
+    normalized_entries = []
+    for rank_global, entry in enumerate(sorted(entries, key=lambda row: int(row.get('perf_score', 0) or 0), reverse=True), 1):
+        model_name = str(entry.get('model_name', '') or '').strip()
+        perf_score = int(entry.get('perf_score', 0) or 0)
+        if not model_name or perf_score <= 0:
+            continue
+        normalized_entries.append(CPUSelectionEntry(
+            snapshot=snapshot,
+            vendor=str(entry.get('vendor', '') or 'unknown').lower(),
+            model_name=model_name,
+            perf_score=perf_score,
+            source_url=str(entry.get('source_url', '') or ''),
+            rank_global=rank_global,
+        ))
+
+    if normalized_entries:
+        CPUSelectionEntry.objects.bulk_create(normalized_entries)
+
+    return snapshot
+
+
+def _load_latest_cpu_selection_scores_from_db():
+    snapshot = CPUSelectionSnapshot.objects.order_by('-fetched_at', '-id').first()
+    if not snapshot:
+        return None, {}, []
+
+    entries = list(snapshot.entries.all().order_by('rank_global', '-perf_score', 'model_name'))
+    scores = {}
+    serialized = []
+    for entry in entries:
+        serialized_entry = {
+            'vendor': entry.vendor,
+            'model_name': entry.model_name,
+            'perf_score': int(entry.perf_score),
+            'source_url': entry.source_url,
+            'rank_global': int(entry.rank_global or 0),
+        }
+        serialized.append(serialized_entry)
+        model_name = _normalize_cpu_model_query(entry.model_name)
+        if model_name:
+            scores[model_name] = max(scores.get(model_name, 0), int(entry.perf_score))
+
+    return snapshot, scores, serialized
 
 
 def _normalize_cpu_model_query(value):
@@ -5545,6 +6713,48 @@ def _match_cpu_model_entry(entries, query):
     return None
 
 
+def _load_available_cpu_inventory_keys(inventory_parts=None):
+    keys = []
+    inventory_parts = inventory_parts or _load_available_cpu_inventory_parts()
+    for part_name in [part.name for part in inventory_parts]:
+        normalized_name = _normalize_cpu_model_query(part_name)
+        if normalized_name:
+            keys.append(normalized_name)
+        extracted_name = _extract_cpu_model_key_for_perf(part_name)
+        if extracted_name:
+            keys.append(_normalize_cpu_model_query(extracted_name))
+    return keys
+
+
+def _filter_available_cpu_selection_entries(entries, inventory_parts=None):
+    inventory_parts = inventory_parts or _load_available_cpu_inventory_parts()
+    inventory_keys = _load_available_cpu_inventory_keys(inventory_parts)
+    if not inventory_keys:
+        return [], 0
+
+    filtered_entries = []
+    excluded_count = 0
+    for entry in entries:
+        normalized_name = _normalize_cpu_model_query(entry.get('model_name'))
+        if not normalized_name:
+            excluded_count += 1
+            continue
+
+        matched = any(
+            normalized_name == inventory_key
+            or normalized_name in inventory_key
+            or inventory_key in normalized_name
+            for inventory_key in inventory_keys
+        )
+        if not matched:
+            excluded_count += 1
+            continue
+
+        filtered_entries.append(entry)
+
+    return filtered_entries, excluded_count
+
+
 class CpuSelectionMaterialLatestAPIView(APIView):
     """CPU選考資料の最新比較データを返す"""
 
@@ -5556,19 +6766,39 @@ class CpuSelectionMaterialLatestAPIView(APIView):
 
         data = fetch_dospara_cpu_selection_material(timeout=max(5, min(timeout, 60)), exclude_intel_13_14=True)
         entries = data.get('entries', [])
+        inventory_parts = _load_available_cpu_inventory_parts()
+        available_entries, removed_count = _filter_available_cpu_selection_entries(entries, inventory_parts=inventory_parts)
+        try:
+            with transaction.atomic():
+                _store_cpu_selection_snapshot(data)
+        except Exception:
+            pass
+
+        serialized_entries = []
+        for entry in available_entries:
+            cpu_part = _match_available_cpu_part(entry.get('model_name', ''), inventory_parts=inventory_parts)
+            serialized_entry = _serialize_cpu_selection_entry(entry)
+            if cpu_part is not None:
+                serialized_entry['price'] = int(cpu_part.price or 0)
+                serialized_entry['value_score'] = (
+                    serialized_entry['perf_score'] / int(cpu_part.price or 0)
+                    if int(cpu_part.price or 0) > 0 and serialized_entry['perf_score'] > 0
+                    else None
+                )
+            serialized_entries.append(serialized_entry)
 
         return Response(
             {
                 'source_name': data.get('source_name', 'dospara_cpu_comparison_pages'),
                 'source_urls': data.get('source_urls', []),
                 'exclude_intel_13_14': bool(data.get('exclude_intel_13_14', True)),
-                'entry_count': int(data.get('entry_count', len(entries))),
-                'excluded_count': int(data.get('excluded_count', 0)),
+                'entry_count': len(available_entries),
+                'excluded_count': int(data.get('excluded_count', 0)) + removed_count,
                 'entries': {
-                    'count': len(entries),
+                    'count': len(serialized_entries),
                     'next': None,
                     'previous': None,
-                    'results': [_serialize_cpu_selection_entry(entry) for entry in entries],
+                    'results': serialized_entries,
                 },
             }
         )
@@ -5615,15 +6845,31 @@ class CpuSelectionMaterialCompareAPIView(APIView):
 
         data = fetch_dospara_cpu_selection_material(timeout=max(5, min(timeout, 60)), exclude_intel_13_14=True)
         entries = data.get('entries', [])
+        inventory_parts = _load_available_cpu_inventory_parts()
+        available_entries, removed_count = _filter_available_cpu_selection_entries(entries, inventory_parts=inventory_parts)
+        try:
+            with transaction.atomic():
+                _store_cpu_selection_snapshot(data)
+        except Exception:
+            pass
 
         results = []
         missing_models = []
         for model in requested_models:
-            matched = _match_cpu_model_entry(entries, model)
+            matched = _match_cpu_model_entry(available_entries, model)
             if matched is None:
                 missing_models.append(model)
                 continue
-            results.append(_serialize_cpu_selection_entry(matched))
+            serialized_entry = _serialize_cpu_selection_entry(matched)
+            cpu_part = _match_available_cpu_part(matched.get('model_name', ''), inventory_parts=inventory_parts)
+            if cpu_part is not None:
+                serialized_entry['price'] = int(cpu_part.price or 0)
+                serialized_entry['value_score'] = (
+                    serialized_entry['perf_score'] / int(cpu_part.price or 0)
+                    if int(cpu_part.price or 0) > 0 and serialized_entry['perf_score'] > 0
+                    else None
+                )
+            results.append(serialized_entry)
 
         results.sort(key=lambda row: row.get('perf_score', 0), reverse=True)
 
@@ -5631,6 +6877,7 @@ class CpuSelectionMaterialCompareAPIView(APIView):
             {
                 'requested_models': requested_models,
                 'missing_models': missing_models,
+                'excluded_count': int(data.get('excluded_count', 0)) + removed_count,
                 'results': results,
             }
         )

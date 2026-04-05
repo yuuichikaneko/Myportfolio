@@ -30,10 +30,13 @@ const savedConfigurationsFixture = [
     usage_display: "Gaming",
     total_price: 140000,
     cpu_data: null,
+    cpu_cooler_data: null,
     gpu_data: null,
     motherboard_data: null,
     memory_data: null,
     storage_data: null,
+    storage2_data: null,
+    storage3_data: null,
     os_data: null,
     psu_data: null,
     case_data: null,
@@ -46,10 +49,13 @@ const savedConfigurationsFixture = [
     usage_display: "General",
     total_price: 82000,
     cpu_data: null,
+    cpu_cooler_data: null,
     gpu_data: null,
     motherboard_data: null,
     memory_data: null,
     storage_data: null,
+    storage2_data: null,
+    storage3_data: null,
     os_data: null,
     psu_data: null,
     case_data: null,
@@ -232,6 +238,25 @@ describe("App history panel", () => {
     await waitFor(() => {
       expect(screen.queryByText("Gaming")).not.toBeInTheDocument();
       expect(screen.getByText("General")).toBeInTheDocument();
+    });
+  });
+
+  it("closes history panel when returning to form from result view", async () => {
+    render(<App />);
+
+    await screen.findByRole("button", { name: "保存履歴 2" });
+    await userEvent.click(screen.getByRole("button", { name: "保存履歴 2" }));
+
+    const gamingCard = screen.getByText("Gaming").closest("div.w-full.text-left.border");
+    expect(gamingCard).toBeTruthy();
+    await userEvent.click(within(gamingCard as HTMLElement).getByRole("button", { name: "詳細を開く" }));
+
+    await screen.findByRole("button", { name: "別の構成を生成" });
+    await userEvent.click(screen.getByRole("button", { name: "別の構成を生成" }));
+
+    await waitFor(() => {
+      expect(screen.queryByText("保存済み構成")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "保存履歴 2" })).toBeInTheDocument();
     });
   });
 });

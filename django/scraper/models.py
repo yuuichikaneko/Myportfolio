@@ -388,3 +388,73 @@ class GPUPerformanceEntry(models.Model):
     def __str__(self):
         suffix = f" {self.vram_gb}GB" if self.vram_gb else ""
         return f"{self.model_key}{suffix} ({self.perf_score})"
+
+
+class CPUSelectionSnapshot(models.Model):
+    """CPU選考資料の取得スナップショット。"""
+    source_name = models.CharField(max_length=80, db_index=True)
+    source_urls = models.JSONField(default=list, blank=True)
+    exclude_intel_13_14 = models.BooleanField(default=True)
+    entry_count = models.PositiveIntegerField(default=0)
+    excluded_count = models.PositiveIntegerField(default=0)
+    parser_version = models.CharField(max_length=30, default='v1')
+    fetched_at = models.DateTimeField(default=timezone.now, db_index=True)
+
+    class Meta:
+        ordering = ['-fetched_at']
+
+    def __str__(self):
+        return f"{self.source_name} @ {self.fetched_at:%Y-%m-%d %H:%M:%S}"
+
+
+class CPUSelectionEntry(models.Model):
+    """CPU選考資料の正規化エントリ。"""
+    snapshot = models.ForeignKey(CPUSelectionSnapshot, on_delete=models.CASCADE, related_name='entries')
+    vendor = models.CharField(max_length=20, db_index=True)
+    model_name = models.CharField(max_length=120)
+    perf_score = models.PositiveIntegerField()
+    source_url = models.URLField(blank=True)
+    rank_global = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-perf_score', 'model_name']
+        unique_together = ('snapshot', 'model_name')
+
+    def __str__(self):
+        return f"{self.model_name} ({self.perf_score})"
+
+
+class CPUSelectionSnapshot(models.Model):
+    """CPU選考資料の取得スナップショット。"""
+    source_name = models.CharField(max_length=80, db_index=True)
+    source_urls = models.JSONField(default=list, blank=True)
+    exclude_intel_13_14 = models.BooleanField(default=True)
+    entry_count = models.PositiveIntegerField(default=0)
+    excluded_count = models.PositiveIntegerField(default=0)
+    parser_version = models.CharField(max_length=30, default='v1')
+    fetched_at = models.DateTimeField(default=timezone.now, db_index=True)
+
+    class Meta:
+        ordering = ['-fetched_at']
+
+    def __str__(self):
+        return f"{self.source_name} @ {self.fetched_at:%Y-%m-%d %H:%M:%S}"
+
+
+class CPUSelectionEntry(models.Model):
+    """CPU選考資料の正規化エントリ。"""
+    snapshot = models.ForeignKey(CPUSelectionSnapshot, on_delete=models.CASCADE, related_name='entries')
+    vendor = models.CharField(max_length=20, db_index=True)
+    model_name = models.CharField(max_length=120)
+    perf_score = models.PositiveIntegerField()
+    source_url = models.URLField(blank=True)
+    rank_global = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-perf_score', 'model_name']
+        unique_together = ('snapshot', 'model_name')
+
+    def __str__(self):
+        return f"{self.model_name} ({self.perf_score})"

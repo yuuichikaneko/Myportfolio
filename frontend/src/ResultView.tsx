@@ -101,6 +101,10 @@ function extractGpuModelKey(text: string) {
   return null;
 }
 
+function normalizeGpuModelKey(text: string) {
+  return text.replace(/[^A-Z0-9]+/g, "").toUpperCase();
+}
+
 function formatGpuModelLabel(entry: GpuPerformanceEntryResponse) {
   const vramLabel = entry.vram_gb ? ` ${entry.vram_gb}GB` : "";
   return `${entry.model_key}${vramLabel}`;
@@ -128,6 +132,56 @@ function extractCpuModelKey(text: string) {
 
 function formatCpuModelLabel(entry: CpuSelectionEntryResponse) {
   return entry.model_name;
+}
+
+const GAMING_CPU_EXCLUDED_MODELS = new Set([
+  "RYZEN 9 9900X",
+  "RYZEN 9 9900X3D",
+  "RYZEN 9 9950X",
+  "RYZEN 9 9950X3D",
+]);
+
+function isGamingCpuX3dModel(modelName: string) {
+  return /x3d/i.test(modelName);
+}
+
+function sortGamingCpuEntries(entries: CpuSelectionEntryResponse[], mode: "cost" | "spec") {
+  const sortedEntries = entries
+    .slice()
+    .filter((entry) => entry.vendor.toLowerCase() === "amd")
+    .filter((entry) => !GAMING_CPU_EXCLUDED_MODELS.has(entry.model_name.replace(/\s+/g, " ").trim().toUpperCase()))
+    .filter((entry) => mode === "cost" ? entry.perf_score > 3000 : true)
+    .sort((left, right) => {
+      if (mode === "cost") {
+        const leftValue = left.value_score ?? (left.price && left.price > 0 ? left.perf_score / left.price : 0);
+        const rightValue = right.value_score ?? (right.price && right.price > 0 ? right.perf_score / right.price : 0);
+
+        if (rightValue !== leftValue) {
+          return rightValue - leftValue;
+        }
+
+        if (right.perf_score !== left.perf_score) {
+          return right.perf_score - left.perf_score;
+        }
+
+        return (left.price ?? Number.MAX_SAFE_INTEGER) - (right.price ?? Number.MAX_SAFE_INTEGER);
+      }
+
+      const leftIsX3d = isGamingCpuX3dModel(left.model_name);
+      const rightIsX3d = isGamingCpuX3dModel(right.model_name);
+
+      if (leftIsX3d !== rightIsX3d) {
+        return Number(rightIsX3d) - Number(leftIsX3d);
+      }
+
+      if (right.perf_score !== left.perf_score) {
+        return right.perf_score - left.perf_score;
+      }
+
+      return left.model_name.localeCompare(right.model_name, "ja");
+    });
+
+  return mode === "cost" ? sortedEntries.slice(0, 10) : sortedEntries;
 }
 
 export function ResultView({ config, onBack }: ResultProps) {
@@ -466,13 +520,19 @@ export function ResultView({ config, onBack }: ResultProps) {
   const selectedGpuBenchmarkScore = !isSavedConfiguration(config)
     ? Number(config.selected_gpu_perf_score ?? 0)
     : 0;
+  const selectedGpuGamingTierLabel = !isSavedConfiguration(config)
+    ? config.selected_gpu_gaming_tier_label ?? ""
+    : "";
 
   const currentGpuPart = normalizedParts.find((part) => part.category === "gpu" && part.price > 0)
     ?? normalizedParts.find((part) => part.category === "gpu")
     ?? null;
   const currentGpuModelKey = currentGpuPart ? extractGpuModelKey(currentGpuPart.name) : null;
+  const currentGpuModelKeyNormalized = currentGpuModelKey ? normalizeGpuModelKey(currentGpuModelKey) : null;
   const currentCpuPart = normalizedParts.find((part) => part.category === "cpu") ?? null;
   const currentCpuModelKey = currentCpuPart ? extractCpuModelKey(currentCpuPart.name) : null;
+  const isGamingUsage = config.usage === "gaming";
+  const gamingCpuRankingMode = isGamingUsage && !isSavedConfiguration(config) && config.build_priority === "cost" ? "cost" : "spec";
 
   const [gpuComparison, setGpuComparison] = useState<GpuPerformanceCompareResponse | null>(null);
   const [gpuSnapshot, setGpuSnapshot] = useState<GpuPerformanceLatestResponse["snapshot"] | null>(null);
@@ -502,7 +562,9 @@ export function ResultView({ config, onBack }: ResultProps) {
 
       try {
         const latest = await getLatestGpuPerformance();
-        const currentEntry = latest.entries.results.find((entry) => entry.model_key === currentGpuModelKey);
+        const currentEntry = latest.entries.results.find(
+          (entry) => normalizeGpuModelKey(entry.model_key) === currentGpuModelKeyNormalized,
+        );
 
         if (!currentEntry) {
           if (!cancelled) {
@@ -543,12 +605,12 @@ export function ResultView({ config, onBack }: ResultProps) {
     return () => {
       cancelled = true;
     };
-  }, [currentGpuModelKey]);
+  }, [currentGpuModelKey, currentGpuModelKeyNormalized]);
 
   useEffect(() => {
     let cancelled = false;
 
-    if (!currentCpuModelKey) {
+    if (!currentCpuModelKey && !isGamingUsage) {
       setCpuComparison(null);
       setCpuMaterialMeta(null);
       setCpuComparisonError(null);
@@ -566,6 +628,37 @@ export function ResultView({ config, onBack }: ResultProps) {
 
       try {
         const latest = await getLatestCpuSelectionMaterial();
+
+        if (isGamingUsage) {
+          const gamingRanking = sortGamingCpuEntries(latest.entries.results, gamingCpuRankingMode);
+
+          if (!cancelled) {
+            setCpuMaterialMeta({
+              entry_count: latest.entry_count,
+              excluded_count: latest.excluded_count,
+              exclude_intel_13_14: latest.exclude_intel_13_14,
+            });
+
+            if (gamingRanking.length === 0) {
+              setCpuComparison(null);
+              setCpuComparisonError("ゲーミングCPU順位のAMD候補が見つかりませんでした。");
+              return;
+            }
+
+            setCpuComparison({
+              requested_models: gamingRanking.map((entry) => entry.model_name),
+              missing_models: [],
+              results: gamingRanking,
+            });
+            setCpuComparisonError(null);
+          }
+          return;
+        }
+
+        if (!currentCpuModelKey) {
+          return;
+        }
+
         const sorted = latest.entries.results
           .slice()
           .sort((left, right) => right.perf_score - left.perf_score);
@@ -621,7 +714,7 @@ export function ResultView({ config, onBack }: ResultProps) {
     return () => {
       cancelled = true;
     };
-  }, [currentCpuModelKey]);
+  }, [currentCpuModelKey, gamingCpuRankingMode, isGamingUsage]);
 
   const selectionSummary = {
     coolerType:
@@ -727,17 +820,20 @@ export function ResultView({ config, onBack }: ResultProps) {
 
           {!isSavedConfiguration(config) && config.usage === "gaming" && benchmarkFloorScore > 0 && (
             <div className="mb-6 rounded-lg border border-emerald-300 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
-              <p className="font-semibold">Time Spy目安: ベンチマークスコア {benchmarkFloorScore.toLocaleString("ja-JP")} 以上</p>
+              <p className="font-semibold">GPU性能目安: ベンチマークスコア {benchmarkFloorScore.toLocaleString("ja-JP")} 以上</p>
               <p className="mt-1 text-xs text-emerald-800">
                 選択GPUスコア: {selectedGpuBenchmarkScore.toLocaleString("ja-JP")}
                 {selectedGpuBenchmarkScore >= benchmarkFloorScore ? " (基準達成)" : " (候補不足のため未達)"}
               </p>
+              {selectedGpuGamingTierLabel && (
+                <p className="mt-1 text-xs text-emerald-800">GPU帯: {selectedGpuGamingTierLabel}</p>
+              )}
             </div>
           )}
 
           {configurationId && (
             <p className="text-sm text-gray-500 mb-6">
-              保存済み構成ID: {configurationId}
+              {isSavedConfiguration(config) ? "保存済み構成ID" : "新規生成ID"}: {configurationId}
             </p>
           )}
 
@@ -872,17 +968,35 @@ export function ResultView({ config, onBack }: ResultProps) {
           <div className="mb-8 rounded-lg border border-emerald-200 bg-emerald-50 p-4">
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
               <div>
-                <p className="text-sm font-semibold text-emerald-700">CPU選考資料（AMD/Intel）</p>
+                <p className="text-sm font-semibold text-emerald-700">
+                  {isGamingUsage
+                    ? gamingCpuRankingMode === "cost"
+                      ? "ゲーミングCPU順位（AMD・コスパ順）"
+                      : "ゲーミングCPU順位（AMD・スペック順）"
+                    : "CPU選考資料（AMD/Intel）"}
+                </p>
                 <p className="text-xs text-emerald-600">
-                  {currentCpuPart ? `選択中CPU: ${currentCpuPart.name}` : "CPU比較対象は見つかりませんでした。"}
+                  {currentCpuPart
+                    ? `選択中CPU: ${currentCpuPart.name}`
+                    : isGamingUsage
+                      ? "AMDのみで順位付けしています。"
+                      : "CPU比較対象は見つかりませんでした。"}
                 </p>
               </div>
               {cpuMaterialMeta && (
                 <p className="text-xs text-emerald-600">
-                  件数: {cpuMaterialMeta.entry_count} / 除外: {cpuMaterialMeta.excluded_count}
+                  {isGamingUsage ? "元データ" : "件数"}: {cpuMaterialMeta.entry_count} / 除外: {cpuMaterialMeta.excluded_count}
                 </p>
               )}
             </div>
+
+            {isGamingUsage ? (
+              <p className="mb-3 text-xs text-emerald-600">
+                {gamingCpuRankingMode === "cost"
+                  ? "コスパ重視では性能/価格で順位付けしています。"
+                  : "スペック重視ではX3Dを優先して性能順に並べています。"}
+              </p>
+            ) : null}
 
             {cpuComparisonLoading ? (
               <p className="text-sm text-emerald-700">CPU選考資料を読み込み中です…</p>
@@ -890,25 +1004,24 @@ export function ResultView({ config, onBack }: ResultProps) {
               <p className="text-sm font-medium text-rose-700">{cpuComparisonError}</p>
             ) : cpuComparison ? (
               <div className="overflow-x-auto">
-                <table className="w-full min-w-[560px] border-separate border-spacing-0 text-left text-sm">
+                <table className="w-full min-w-[680px] border-separate border-spacing-0 text-left text-sm">
                   <thead>
                     <tr className="text-xs uppercase tracking-wide text-emerald-700">
+                      <th className="border-b border-emerald-200 pb-2 pr-4">順位</th>
                       <th className="border-b border-emerald-200 pb-2 pr-4">モデル</th>
                       <th className="border-b border-emerald-200 pb-2 pr-4">Vendor</th>
-                      <th className="border-b border-emerald-200 pb-2 pr-4">性能目安</th>
+                      <th className="border-b border-emerald-200 pb-2 pr-4">{gamingCpuRankingMode === "cost" ? "コスパ" : "性能目安"}</th>
                       <th className="border-b border-emerald-200 pb-2">詳細</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {cpuComparison.results
-                      .slice()
-                      .sort((left, right) => right.perf_score - left.perf_score)
-                      .map((entry) => {
+                    {cpuComparison.results.map((entry, index) => {
                         const isCurrent = currentCpuModelKey
                           ? entry.model_name.replace(/\s+/g, " ").trim().toUpperCase().includes(currentCpuModelKey)
                           : false;
                         return (
                           <tr key={`${entry.vendor}:${entry.model_name}`} className={isCurrent ? "bg-emerald-100/80" : "bg-white/70"}>
+                            <td className="border-b border-emerald-100 py-2 pr-4 font-semibold text-slate-700">{index + 1}</td>
                             <td className="border-b border-emerald-100 py-2 pr-4 font-medium text-slate-800">
                               {formatCpuModelLabel(entry)}
                               {isCurrent && (
@@ -918,7 +1031,11 @@ export function ResultView({ config, onBack }: ResultProps) {
                               )}
                             </td>
                             <td className="border-b border-emerald-100 py-2 pr-4 text-slate-700">{entry.vendor.toUpperCase()}</td>
-                            <td className="border-b border-emerald-100 py-2 pr-4 text-slate-700">{entry.perf_score.toLocaleString("ja-JP")}</td>
+                            <td className="border-b border-emerald-100 py-2 pr-4 text-slate-700">
+                              {gamingCpuRankingMode === "cost"
+                                ? (entry.value_score ?? 0).toFixed(6)
+                                : entry.perf_score.toLocaleString("ja-JP")}
+                            </td>
                             <td className="border-b border-emerald-100 py-2 text-slate-700">
                               <a href={entry.source_url} target="_blank" rel="noopener noreferrer" className="font-medium text-emerald-700 hover:text-emerald-900">
                                 表示

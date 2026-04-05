@@ -262,6 +262,7 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
   const [caseFanPolicy, setCaseFanPolicy] = useState<"auto" | "silent" | "airflow">("auto");
   const [cpuVendor, setCpuVendor] = useState<"any" | "intel" | "amd">("any");
   const [buildPriority, setBuildPriority] = useState<"cost" | "spec">("cost");
+  const [selectedPresetIndex, setSelectedPresetIndex] = useState<number | null>(null);
   const previousBuildPriorityRef = useRef<"cost" | "spec">("cost");
   const [storagePreference, setStoragePreference] = useState<"ssd" | "hdd">("ssd");
   const [mainStorageCapacity, setMainStorageCapacity] = useState<"512" | "1024" | "2048" | "4096">("512");
@@ -352,26 +353,6 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
       setBudget(Math.max(0, marketRange.min - 15000));
     }
   }, [usage, marketRange.min]);
-
-  useEffect(() => {
-    const prev = previousBuildPriorityRef.current;
-    if (prev === buildPriority) {
-      return;
-    }
-
-    setBudget((current) => {
-      const clampedCurrent = Math.min(budgetMax, Math.max(budgetMin, current));
-      if (prev === "cost" && buildPriority === "spec") {
-        return Math.min(budgetMax, Math.round(clampedCurrent * 1.2));
-      }
-      if (prev === "spec" && buildPriority === "cost") {
-        return Math.max(budgetMin, Math.round(clampedCurrent / 1.2));
-      }
-      return clampedCurrent;
-    });
-
-    previousBuildPriorityRef.current = buildPriority;
-  }, [buildPriority, budgetMax, budgetMin]);
 
   useEffect(() => {
     if (!popupMessage) {
@@ -481,6 +462,32 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
       { label: "プレミアム", value: flagship },
     ];
   }, [budgetMax, buildPriority, marketRange.gaming_x3d_recommended_min, marketRange.min, usage]);
+
+  useEffect(() => {
+    const prev = previousBuildPriorityRef.current;
+    if (prev === buildPriority) {
+      return;
+    }
+
+    if (selectedPresetIndex != null && presets[selectedPresetIndex]) {
+      setBudget(presets[selectedPresetIndex].value);
+      previousBuildPriorityRef.current = buildPriority;
+      return;
+    }
+
+    setBudget((current) => {
+      const clampedCurrent = Math.min(budgetMax, Math.max(budgetMin, current));
+      if (prev === "cost" && buildPriority === "spec") {
+        return Math.min(budgetMax, Math.round(clampedCurrent * 1.2));
+      }
+      if (prev === "spec" && buildPriority === "cost") {
+        return Math.max(budgetMin, Math.round(clampedCurrent / 1.2));
+      }
+      return clampedCurrent;
+    });
+
+    previousBuildPriorityRef.current = buildPriority;
+  }, [buildPriority, budgetMax, budgetMin, presets, selectedPresetIndex]);
 
   const usagePriceHint = useMemo(() => {
     if (presets.length === 0) {
@@ -716,7 +723,10 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
                 max={budgetMax}
                 step={1000}
                 value={Math.min(budgetMax, Math.max(budgetMin, budget))}
-                onChange={(event) => setBudget(Number(event.target.value))}
+                onChange={(event) => {
+                  setBudget(Number(event.target.value));
+                  setSelectedPresetIndex(null);
+                }}
                 className="h-2 w-full cursor-pointer appearance-none rounded-full bg-slate-200 accent-blue-600"
                 style={{ backgroundSize: `${budgetProgress}% 100%` }}
               />
@@ -739,6 +749,7 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
                 onFocus={() => setPopupMessage(`入力範囲: ¥${budgetMin.toLocaleString("ja-JP")} - ¥${budgetMax.toLocaleString("ja-JP")}`)}
                 onChange={(e) => {
                   setBudget(Number(e.target.value));
+                  setSelectedPresetIndex(null);
                   setPopupMessage(`入力範囲: ¥${budgetMin.toLocaleString("ja-JP")} - ¥${budgetMax.toLocaleString("ja-JP")}`);
                 }}
                 min={50000}
@@ -782,12 +793,15 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
               ))}
             </div>
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-              {presets.map((preset) => (
+              {presets.map((preset, index) => (
                 <button
-                  key={preset.value}
+                  key={preset.label}
                   type="button"
-                  onClick={() => setBudget(preset.value)}
-                  className={segmentButtonClass(budget === preset.value)}
+                  onClick={() => {
+                    setBudget(preset.value);
+                    setSelectedPresetIndex(index);
+                  }}
+                  className={segmentButtonClass(selectedPresetIndex === index)}
                 >
                   {preset.label}
                 </button>
