@@ -170,6 +170,7 @@ function App() {
     setResult(null);
     setSelectedSavedConfig(null);
     setError(null);
+    setShowHistory(false);
   };
 
   const handleSelectSavedConfig = (config: SavedConfigurationResponse) => {

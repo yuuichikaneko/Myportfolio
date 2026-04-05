@@ -25,7 +25,12 @@ async function safeFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
 async function parseApiError(response: Response, fallbackMessage: string): Promise<Error> {
   try {
     const error = await response.json();
-    return new Error(error.detail || fallbackMessage);
+    const detail = error.detail || fallbackMessage;
+    const recommended = error.recommended_budget_min_for_x3d;
+    if (typeof recommended === "number" && Number.isFinite(recommended)) {
+      return new Error(`${detail} 推奨予算: ¥${recommended.toLocaleString("ja-JP")}`);
+    }
+    return new Error(detail);
   } catch {
     return new Error(fallbackMessage);
   }
@@ -60,6 +65,14 @@ export interface PartResponse {
 export interface GenerateConfigResponse {
   usage: string;
   budget: number;
+  requested_budget?: number;
+  budget_auto_adjusted?: boolean;
+  recommended_budget_min_for_x3d?: number | null;
+  x3d_enforced?: boolean;
+  minimum_gaming_gpu_perf_score?: number;
+  selected_gpu_perf_score?: number;
+  selected_gpu_gaming_tier_label?: string;
+  message?: string;
   cooler_type?: "air" | "liquid" | "any";
   radiator_size?: "120" | "240" | "360" | "any";
   cooling_profile?: "silent" | "performance" | "balanced";
@@ -164,6 +177,8 @@ export interface MarketPriceRangeResponse {
   max: number;
   default: number;
   currency: string;
+  gaming_x3d_cpu_floor?: number;
+  gaming_x3d_recommended_min?: number;
   sources: Record<string, MarketPriceRangeSource>;
 }
 
@@ -257,6 +272,62 @@ export interface StorageInventoryResponse {
   interface_summary: StorageInterfaceSummary[];
 }
 
+export interface GpuPerformanceSnapshotMeta {
+  id: number;
+  source_name: string;
+  source_url: string;
+  updated_at_source: string | null;
+  score_note: string;
+  parser_version: string;
+  fetched_at: string;
+}
+
+export interface GpuPerformanceEntryResponse {
+  gpu_name: string;
+  model_key: string;
+  vendor: string;
+  vram_gb: number | null;
+  perf_score: number;
+  detail_url: string;
+  rank_global: number;
+}
+
+export interface GpuPerformanceLatestResponse {
+  snapshot: GpuPerformanceSnapshotMeta;
+  entries: PaginatedResponse<GpuPerformanceEntryResponse>;
+}
+
+export interface GpuPerformanceCompareResponse {
+  snapshot_id: number;
+  requested_models: string[];
+  missing_models: string[];
+  results: GpuPerformanceEntryResponse[];
+}
+
+export interface CpuSelectionEntryResponse {
+  vendor: string;
+  model_name: string;
+  perf_score: number;
+  price?: number | null;
+  value_score?: number | null;
+  source_url: string;
+}
+
+export interface CpuSelectionMaterialLatestResponse {
+  source_name: string;
+  source_urls: string[];
+  exclude_intel_13_14: boolean;
+  entry_count: number;
+  excluded_count: number;
+  entries: PaginatedResponse<CpuSelectionEntryResponse>;
+}
+
+export interface CpuSelectionMaterialCompareResponse {
+  requested_models: string[];
+  missing_models: string[];
+  results: CpuSelectionEntryResponse[];
+}
+
 export async function getPartPriceRanges(): Promise<PartPriceRangesResponse> {
   const response = await safeFetch(`${API_BASE_URL}/part-price-ranges/`);
 
@@ -272,6 +343,58 @@ export async function getStorageInventory(): Promise<StorageInventoryResponse> {
 
   if (!response.ok) {
     throw await parseApiError(response, "Failed to get storage inventory");
+  }
+
+  return response.json();
+}
+
+export async function getLatestGpuPerformance(): Promise<GpuPerformanceLatestResponse> {
+  const response = await safeFetch(`${API_BASE_URL}/gpu-performance/latest/`);
+
+  if (!response.ok) {
+    throw await parseApiError(response, "Failed to get GPU performance latest snapshot");
+  }
+
+  return response.json();
+}
+
+export async function compareGpuPerformance(models: string[]): Promise<GpuPerformanceCompareResponse> {
+  const response = await safeFetch(`${API_BASE_URL}/gpu-performance/compare/`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ models }),
+  });
+
+  if (!response.ok) {
+    throw await parseApiError(response, "Failed to compare GPU performance");
+  }
+
+  return response.json();
+}
+
+export async function getLatestCpuSelectionMaterial(): Promise<CpuSelectionMaterialLatestResponse> {
+  const response = await safeFetch(`${API_BASE_URL}/cpu-selection-material/latest/`);
+
+  if (!response.ok) {
+    throw await parseApiError(response, "Failed to get CPU selection material");
+  }
+
+  return response.json();
+}
+
+export async function compareCpuSelectionMaterial(models: string[]): Promise<CpuSelectionMaterialCompareResponse> {
+  const response = await safeFetch(`${API_BASE_URL}/cpu-selection-material/compare/`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ models }),
+  });
+
+  if (!response.ok) {
+    throw await parseApiError(response, "Failed to compare CPU selection material");
   }
 
   return response.json();

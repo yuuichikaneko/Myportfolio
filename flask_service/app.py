@@ -23,6 +23,8 @@ def _imports() -> dict[str, Any]:
     return {
         "fetch_dospara_market_price_range": getattr(dospara_scraper, "fetch_dospara_market_price_range"),
         "Configuration": getattr(models, "Configuration"),
+        "GPUPerformanceEntry": getattr(models, "GPUPerformanceEntry"),
+        "GPUPerformanceSnapshot": getattr(models, "GPUPerformanceSnapshot"),
         "PCPart": getattr(models, "PCPart"),
         "ScraperStatus": getattr(models, "ScraperStatus"),
         "ConfigurationSerializer": getattr(serializers, "ConfigurationSerializer"),
@@ -104,6 +106,8 @@ def create_app() -> Flask:
     refs = _imports()
     PCPart = refs["PCPart"]
     Configuration = refs["Configuration"]
+    GPUPerformanceSnapshot = refs["GPUPerformanceSnapshot"]
+    GPUPerformanceEntry = refs["GPUPerformanceEntry"]
     ScraperStatus = refs["ScraperStatus"]
     PCPartSerializer = refs["PCPartSerializer"]
     ConfigurationSerializer = refs["ConfigurationSerializer"]
@@ -274,6 +278,88 @@ def create_app() -> Flask:
     def market_price_range() -> Response:
         data = fetch_dospara_market_price_range(timeout=15)
         return _json_response(data)
+
+    @app.get("/api/gpu-performance/latest/")
+    def latest_gpu_performance() -> Response:
+        latest = GPUPerformanceSnapshot.objects.order_by("-fetched_at", "-id").first()
+        if not latest:
+            return _json_response({"detail": "GPU performance snapshot not found."}, 404)
+
+        entries = GPUPerformanceEntry.objects.filter(snapshot=latest, is_laptop=False).order_by("-perf_score", "gpu_name")
+        payload = []
+        for entry in entries:
+            payload.append(
+                {
+                    "gpu_name": entry.gpu_name,
+                    "model_key": entry.model_key,
+                    "vendor": entry.vendor,
+                    "vram_gb": entry.vram_gb,
+                    "perf_score": entry.perf_score,
+                    "detail_url": entry.detail_url,
+                    "rank_global": entry.rank_global,
+                }
+            )
+
+        return _json_response(
+            {
+                "snapshot": {
+                    "id": latest.id,
+                    "source_name": latest.source_name,
+                    "source_url": latest.source_url,
+                    "updated_at_source": latest.updated_at_source,
+                    "score_note": latest.score_note,
+                    "parser_version": latest.parser_version,
+                    "fetched_at": latest.fetched_at,
+                },
+                "entries": _paginate(payload),
+            }
+        )
+
+    @app.get("/api/gpu-performance/compare/")
+    def compare_gpu_performance() -> Response:
+        latest = GPUPerformanceSnapshot.objects.order_by("-fetched_at", "-id").first()
+        if not latest:
+            return _json_response({"detail": "GPU performance snapshot not found."}, 404)
+
+        models_query = request.args.get("models", default="", type=str)
+        if not models_query.strip():
+            return _json_response({"detail": "models query parameter required."}, 400)
+
+        requested_models = [m.strip().upper() for m in models_query.split(",") if m.strip()]
+        if not requested_models:
+            return _json_response({"detail": "at least one model is required."}, 400)
+
+        entries = (
+            GPUPerformanceEntry.objects.filter(snapshot=latest, is_laptop=False, model_key__in=requested_models)
+            .order_by("-perf_score", "gpu_name")
+        )
+
+        items = []
+        matched_models = set()
+        for entry in entries:
+            matched_models.add(entry.model_key)
+            items.append(
+                {
+                    "gpu_name": entry.gpu_name,
+                    "model_key": entry.model_key,
+                    "vendor": entry.vendor,
+                    "vram_gb": entry.vram_gb,
+                    "perf_score": entry.perf_score,
+                    "detail_url": entry.detail_url,
+                    "rank_global": entry.rank_global,
+                }
+            )
+
+        missing_models = [model for model in requested_models if model not in matched_models]
+
+        return _json_response(
+            {
+                "snapshot_id": latest.id,
+                "requested_models": requested_models,
+                "missing_models": missing_models,
+                "results": items,
+            }
+        )
 
     @app.get("/api/part-price-ranges/")
     def part_price_ranges() -> Response:
