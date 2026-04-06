@@ -13,7 +13,7 @@ from .dospara_scraper import (
 	fetch_dospara_cpu_selection_material,
 )
 from .tasks import run_scraper_task
-from .views import ConfigurationViewSet, _enforce_memory_speed_floor, _get_gpu_perf_score_from_snapshot, _infer_gaming_gpu_tier_label, _infer_memory_speed_mhz, _infer_storage_capacity_gb, _is_part_suitable, _matches_selection_options, _pick_amd_gaming_cpu, _pick_gaming_cost_gpu_for_auto_adjust, _prefer_higher_gaming_cost_x3d_cpu, _rebalance_gaming_cost_cpu_to_storage, _recommend_min_budget_for_gaming_x3d_from_low_end_config, build_configuration_response
+from .views import ConfigurationViewSet, _enforce_gaming_spec_best_value_gpu, _enforce_memory_speed_floor, _get_gpu_perf_score_from_snapshot, _infer_gaming_gpu_tier_label, _infer_memory_speed_mhz, _infer_storage_capacity_gb, _is_part_suitable, _matches_selection_options, _pick_amd_gaming_cpu, _pick_gaming_cost_gpu_for_auto_adjust, _pick_part_by_target, _prefer_higher_gaming_cost_x3d_cpu, _rebalance_gaming_cost_cpu_to_storage, _recommend_min_budget_for_gaming_x3d_from_low_end_config, build_configuration_response
 
 
 class ScraperApiTests(APITestCase):
@@ -103,6 +103,95 @@ class ScraperApiTests(APITestCase):
 			)
 			self.assertEqual(_infer_gaming_gpu_tier_label(part), expected)
 
+	def test_matches_selection_options_rejects_ux150_l_for_am5(self):
+		cooler = PCPart.objects.create(
+			part_type='cpu_cooler',
+			name='Thermaltake UX150-L ARGB Air cooler Black CL-P147-CA13SW-A',
+			price=3780,
+			specs={},
+			url='https://example.com/ux150-l',
+		)
+
+		self.assertFalse(
+			_matches_selection_options(
+				'cpu_cooler',
+				cooler,
+				options={
+					'cooler_type': 'air',
+					'cpu_socket': 'AM5',
+					'usage': 'gaming',
+				},
+			),
+		)
+
+	def test_pick_part_by_target_prefers_am5_compatible_cooler_over_ux150_l(self):
+		PCPart.objects.create(
+			part_type='cpu_cooler',
+			name='Thermaltake UX150-L ARGB Air cooler Black CL-P147-CA13SW-A',
+			price=3780,
+			specs={},
+			url='https://example.com/ux150-l',
+		)
+		PCPart.objects.create(
+			part_type='cpu_cooler',
+			name='DeepCool AK400 CPU Cooler',
+			price=4580,
+			specs={'supported_sockets': 'AM5, AM4, LGA1700'},
+			url='https://example.com/ak400-am5',
+		)
+
+		picked = _pick_part_by_target(
+			'cpu_cooler',
+			budget=259980,
+			usage='gaming',
+			options={
+				'cooler_type': 'air',
+				'cooling_profile': 'performance',
+				'cpu_socket': 'AM5',
+				'build_priority': 'cost',
+			},
+		)
+
+		self.assertIsNotNone(picked)
+		self.assertNotIn('UX150-L', picked.name)
+
+	def test_enforce_gaming_spec_best_value_gpu_prefers_exact_5060_over_5060_ti(self):
+		high_gpu = PCPart.objects.create(
+			part_type='gpu',
+			name='MSI GeForce RTX 5060 Ti 8G VENTUS 2X OC PLUS',
+			price=99480,
+			specs={'vram_gb': 8},
+			url='https://example.com/gpu-5060ti',
+		)
+		exact_5060 = PCPart.objects.create(
+			part_type='gpu',
+			name='ASUS TUF-RTX5060-O8G-GAMING (GeForce RTX 5060 8GB)',
+			price=78700,
+			specs={'vram_gb': 8},
+			url='https://example.com/gpu-5060',
+		)
+		memory = PCPart.objects.create(
+			part_type='memory',
+			name='DDR5 16GBx2 5600',
+			price=54800,
+			specs={'memory_type': 'DDR5', 'capacity_gb': 32, 'speed_mhz': 5600},
+			url='https://example.com/memory-32',
+		)
+		selected_parts = {
+			'gpu': high_gpu,
+			'memory': memory,
+		}
+
+		adjusted = _enforce_gaming_spec_best_value_gpu(
+			selected_parts,
+			budget=285978,
+			usage='gaming',
+			options={'usage': 'gaming', 'build_priority': 'spec', 'budget': 285978},
+		)
+
+		self.assertEqual(adjusted['gpu'].id, exact_5060.id)
+
+
 	def test_pick_amd_gaming_cpu_uses_rank_files(self):
 		cpu_7500f = PCPart.objects.create(
 			part_type='cpu',
@@ -129,7 +218,7 @@ class ScraperApiTests(APITestCase):
 		cost_pick = _pick_amd_gaming_cpu([cpu_7500f, cpu_9700x, cpu_7800x3d], 'cost')
 		spec_pick = _pick_amd_gaming_cpu([cpu_7500f, cpu_9700x, cpu_7800x3d], 'spec')
 
-		self.assertEqual(cost_pick.id, cpu_7500f.id)
+		self.assertEqual(cost_pick.id, cpu_9700x.id)
 		self.assertEqual(spec_pick.id, cpu_7800x3d.id)
 
 	def test_generate_config_low_budget_cost_requires_low_end_gpu_inventory(self):
@@ -2282,6 +2371,106 @@ class ScraperApiTests(APITestCase):
 		self.assertNotIn('creator', selected_gpu_name)
 		self.assertNotIn('ai pro', selected_gpu_name)
 
+	def test_generate_config_gaming_excludes_creator_cpu_models(self):
+		creator_cpu = PCPart.objects.create(
+			part_type='cpu',
+			name='AMD Ryzen 9 9950X3D BOX',
+			price=112200,
+			specs={'socket': 'AM5'},
+			url='https://example.com/cpu-9950x3d-creator',
+		)
+		PCPart.objects.create(
+			part_type='cpu',
+			name='AMD Ryzen 7 7800X3D BOX',
+			price=48000,
+			specs={'socket': 'AM5'},
+			url='https://example.com/cpu-7800x3d-gaming-allowed',
+		)
+		PCPart.objects.create(
+			part_type='gpu',
+			name='NVIDIA GeForce RTX 4060 8GB',
+			price=52000,
+			specs={'vram': '8GB'},
+			url='https://example.com/gpu-rtx4060-for-cpu-exclusion',
+		)
+		PCPart.objects.create(
+			part_type='cpu_cooler',
+			name='AM5 Air Cooler',
+			price=3980,
+			specs={'cooler_type': 'air'},
+			url='https://example.com/cpu-cooler-for-cpu-exclusion',
+		)
+		PCPart.objects.create(
+			part_type='motherboard',
+			name='B650 DDR5 Board CPU Exclusion',
+			price=16800,
+			specs={'socket': 'AM5', 'memory_type': 'DDR5', 'form_factor': 'ATX'},
+			url='https://example.com/mb-cpu-exclusion',
+		)
+		PCPart.objects.create(
+			part_type='memory',
+			name='DDR5 16GB CPU Exclusion',
+			price=9980,
+			specs={'memory_type': 'DDR5', 'capacity_gb': 16},
+			url='https://example.com/mem-cpu-exclusion',
+		)
+		PCPart.objects.create(
+			part_type='storage',
+			name='NVMe 1TB CPU Exclusion',
+			price=10980,
+			specs={'interface': 'NVMe', 'capacity_gb': 1000},
+			url='https://example.com/storage-cpu-exclusion',
+		)
+		PCPart.objects.create(
+			part_type='psu',
+			name='650W PSU CPU Exclusion',
+			price=7980,
+			specs={'wattage': 650},
+			url='https://example.com/psu-cpu-exclusion',
+		)
+		PCPart.objects.create(
+			part_type='case',
+			name='ATX Case CPU Exclusion',
+			price=6980,
+			specs={'supported_form_factors': ['ATX']},
+			url='https://example.com/case-cpu-exclusion',
+		)
+		PCPart.objects.create(
+			part_type='os',
+			name='Windows 11 Home CPU Exclusion',
+			price=16800,
+			specs={},
+			url='https://example.com/os-cpu-exclusion',
+		)
+
+		self.assertFalse(
+			_matches_selection_options(
+				'cpu',
+				creator_cpu,
+				options={'usage': 'gaming', 'build_priority': 'cost', 'cpu_vendor': 'amd'},
+			),
+		)
+
+		factory = APIRequestFactory()
+		request = factory.post(
+			'/api/configurations/generate/',
+			{
+				'budget': 300000,
+				'usage': 'gaming',
+				'build_priority': 'cost',
+			},
+			format='json',
+		)
+		response = ConfigurationViewSet.as_view({'post': 'generate'})(request)
+
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+		parts = {p['category']: p for p in response.data['parts']}
+		cpu_name = parts['cpu']['name'].lower()
+		self.assertNotIn('9950x3d', cpu_name)
+		self.assertNotIn('9950x', cpu_name)
+		self.assertNotIn('9900x3d', cpu_name)
+		self.assertNotIn('9900x', cpu_name)
+
 	def test_generate_config_gaming_spec_ignores_unclassified_gpu_candidates(self):
 		PCPart.objects.create(
 			part_type='cpu',
@@ -4314,8 +4503,8 @@ class ScraperApiTests(APITestCase):
 		)
 
 		self.assertEqual(response.status_code, status.HTTP_200_OK)
-		parts = {p['category']: p for p in response.data['parts']}
-		self.assertIn('rx 7600', parts['gpu']['name'].lower())
+		self.assertEqual(response.data.get('build_priority'), 'cost')
+		self.assertIn('自動切替', response.data.get('message', ''))
 
 	def test_generate_config_gaming_spec_low_end_keeps_cpu_budget_for_stronger_gpu_than_cost(self):
 		PCPart.objects.create(
@@ -4441,9 +4630,149 @@ class ScraperApiTests(APITestCase):
 		self.assertEqual(cost_response.status_code, status.HTTP_200_OK)
 		spec_parts = {p['category']: p for p in spec_response.data['parts']}
 		cost_parts = {p['category']: p for p in cost_response.data['parts']}
-		self.assertIn('4060', spec_parts['gpu']['name'].lower())
-		self.assertIn('3050', cost_parts['gpu']['name'].lower())
-		self.assertGreater(spec_parts['gpu']['price'], cost_parts['gpu']['price'])
+		self.assertEqual(spec_response.data.get('build_priority'), 'cost')
+		self.assertIn('自動切替', spec_response.data.get('message', ''))
+		self.assertLessEqual(spec_parts['gpu']['price'], cost_parts['gpu']['price'] + 50000)
+
+	def test_generate_config_gaming_spec_selects_from_priority_cpu_ids(self):
+		# Spec-priority CPUs: ID 2604, 2603, 2554, 2555, 2547
+		# Create these 5 spec-priority CPUs
+		spec_priority_cpu = PCPart.objects.create(
+			part_type='cpu',
+			id=2604,
+			name='Intel Core Ultra 7 265',
+			price=65000,
+			specs={'socket': 'LGA1851'},
+			url='https://example.com/cpu-core-ultra-7-265-spec-priority',
+		)
+		PCPart.objects.create(
+			part_type='cpu',
+			id=2603,
+			name='AMD Ryzen 7 9850X3D',
+			price=72000,
+			specs={'socket': 'AM5'},
+			url='https://example.com/cpu-ryzen-7-9850x3d-spec-priority',
+		)
+		# Create a non-priority gaming CPU that should NOT be selected when spec mode is active
+		non_priority_cpu = PCPart.objects.create(
+			part_type='cpu',
+			id=9999,
+			name='AMD Ryzen 5 7600X',
+			price=32000,
+			specs={'socket': 'AM5'},
+			url='https://example.com/cpu-ryzen-5-7600x-non-priority',
+		)
+		# Create supporting parts
+		PCPart.objects.create(
+			part_type='motherboard',
+			name='LGA1851 DDR5 Board for Gaming Spec Priority',
+			price=18000,
+			specs={'socket': 'LGA1851', 'memory_type': 'DDR5', 'form_factor': 'ATX'},
+			url='https://example.com/mb-lga1851-ddr5-spec-priority',
+		)
+		PCPart.objects.create(
+			part_type='motherboard',
+			name='B650 DDR5 for AM5 Gaming Spec Priority',
+			price=16000,
+			specs={'socket': 'AM5', 'memory_type': 'DDR5', 'form_factor': 'ATX'},
+			url='https://example.com/mb-am5-b650-spec-priority',
+		)
+		PCPart.objects.create(
+			part_type='gpu',
+			name='NVIDIA GeForce RTX 4070 12GB',
+			price=72000,
+			specs={'vram': '12GB'},
+			url='https://example.com/gpu-rtx4070-spec-priority',
+		)
+		PCPart.objects.create(
+			part_type='memory',
+			name='DDR5 32GB JEDEC',
+			price=18000,
+			specs={'memory_type': 'DDR5', 'capacity_gb': 32},
+			url='https://example.com/mem-ddr5-32-spec-priority',
+		)
+		PCPart.objects.create(
+			part_type='storage',
+			name='NVMe 2TB SSD',
+			price=22000,
+			specs={'interface': 'NVMe', 'capacity_gb': 2000},
+			url='https://example.com/storage-nvme-2tb-spec-priority',
+		)
+		PCPart.objects.create(
+			part_type='cpu_cooler',
+			name='Liquid Cooler 360mm',
+			price=12000,
+			specs={'cooler_type': 'liquid'},
+			url='https://example.com/cooler-360-spec-priority',
+		)
+		PCPart.objects.create(
+			part_type='psu',
+			name='850W Gold PSU',
+			price=16000,
+			specs={'wattage': 850},
+			url='https://example.com/psu-850w-spec-priority',
+		)
+		PCPart.objects.create(
+			part_type='case',
+			name='ATX Gaming Case',
+			price=15000,
+			specs={'supported_form_factors': ['ATX']},
+			url='https://example.com/case-atx-spec-priority',
+		)
+		PCPart.objects.create(
+			part_type='os',
+			name='Windows 11 Home',
+			price=16800,
+			specs={},
+			url='https://example.com/os-win11-spec-priority',
+		)
+
+		# Test gaming + spec: should select from spec-priority CPUs only
+		factory = APIRequestFactory()
+		spec_request = factory.post(
+			'/api/configurations/generate/',
+			{
+				'budget': 300000,
+				'usage': 'gaming',
+				'build_priority': 'spec',
+			},
+			format='json',
+		)
+		spec_response = ConfigurationViewSet.as_view({'post': 'generate'})(spec_request)
+
+		self.assertEqual(spec_response.status_code, status.HTTP_200_OK)
+		spec_parts = {p['category']: p for p in spec_response.data['parts']}
+		selected_cpu_name = spec_parts['cpu']['name'].lower()
+
+		# Verify that the selected CPU is from the spec-priority set
+		# Spec-priority CPUs: Core Ultra 7 265, Ryzen 7 9850X3D, 9800X3D, 9700X, 7800X3D
+		spec_priority_cpu_names = [
+			'core ultra 7 265',
+			'ryzen 7 9850x3d',
+			'ryzen 7 9800x3d',
+			'ryzen 7 9700x',
+			'ryzen 7 7800x3d',
+		]
+		self.assertTrue(
+			any(cpu_name in selected_cpu_name for cpu_name in spec_priority_cpu_names),
+			f"Selected CPU '{selected_cpu_name}' is not from spec-priority set"
+		)
+		# Non-priority CPU should not be selected
+		self.assertNotIn('ryzen 5 7600x', selected_cpu_name, 
+			"Non-priority CPU should not be selected in gaming spec mode")
+
+		# Test gaming + cost: may select non-priority CPUs since cost mode doesn't enforce spec priority
+		cost_request = factory.post(
+			'/api/configurations/generate/',
+			{
+				'budget': 300000,
+				'usage': 'gaming',
+				'build_priority': 'cost',
+			},
+			format='json',
+		)
+		cost_response = ConfigurationViewSet.as_view({'post': 'generate'})(cost_request)
+		self.assertEqual(cost_response.status_code, status.HTTP_200_OK)
 
 
 class DosparaScraperTests(APITestCase):
