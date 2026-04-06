@@ -274,6 +274,8 @@ def run_scraper_task():
                         'price': part['price'],
                         'url': part['url'],
                         'specs': part.get('specs', {'source': 'dospara'}),
+                        'stock_status': part.get('stock_status', 'unknown'),
+                        'is_active': part.get('is_active', True),
                     },
                 )
                 saved_count += 1 if created else 0

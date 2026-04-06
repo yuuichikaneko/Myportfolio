@@ -6,10 +6,6 @@ cpu_csv = base / "全パーツ_cpu.csv"
 
 # ユーザー提示 + 既存運用で使っている性能目安
 perf_map = {
-    "Ryzen 9 9950X3D": 7390,
-    "Ryzen 9 9950X": 6928,
-    "Ryzen 9 9900X3D": 5922,
-    "Ryzen 9 9900X": 5731,
     "Ryzen 7 9850X3D": 4373,
     "Ryzen 7 9800X3D": 4208,
     "Ryzen 7 9700X": 3904,
@@ -59,7 +55,7 @@ print("AMD gaming candidates (perf>=3000, URLあり):", len(rows))
 for i, (name, price, perf, value, url, _) in enumerate(rows, 1):
     print(f"{i:>2}. {name} | price={price} | perf={perf} | value={value:.6f}")
 
-expected = {"Ryzen 9 9950X3D", "Ryzen 9 9950X", "Ryzen 9 9900X3D", "Ryzen 9 9900X", "Ryzen 7 9850X3D", "Ryzen 7 9800X3D", "Ryzen 7 9700X", "Ryzen 7 8700G", "Ryzen 7 7700", "Ryzen 7 7800X3D", "Ryzen 5 9600X", "Ryzen 5 9600"}
+expected = {"Ryzen 7 9850X3D", "Ryzen 7 9800X3D", "Ryzen 7 9700X", "Ryzen 7 8700G", "Ryzen 7 7700", "Ryzen 7 7800X3D", "Ryzen 5 9600X", "Ryzen 5 9600"}
 present = set()
 for _, _, _, _, _, matched_key in rows:
     present.add(matched_key)

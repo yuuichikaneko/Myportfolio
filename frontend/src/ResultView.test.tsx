@@ -159,12 +159,12 @@ describe("ResultView", () => {
     render(<ResultView config={config} onBack={() => {}} />);
 
     await waitFor(() => {
-      expect(screen.getByText("ゲーミングCPU順位（AMD・コスパ順）")).toBeInTheDocument();
+      expect(screen.getByText("ゲーミングCPU選択テーブル（AMD・コスパ重視）")).toBeInTheDocument();
     });
 
     expect(screen.getByText("新規生成ID: 2")).toBeInTheDocument();
 
-    expect(screen.getByText("コスパ重視では性能/価格で順位付けしています。")).toBeInTheDocument();
+    expect(screen.getByText("コスパ重視では性能/価格で選択候補を並べています。")).toBeInTheDocument();
     expect(screen.getByText("Ryzen 7 9700X")).toBeInTheDocument();
     expect(screen.getByText("Ryzen 5 9600X")).toBeInTheDocument();
     expect(screen.getByText("0.097163")).toBeInTheDocument();

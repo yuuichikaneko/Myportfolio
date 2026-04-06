@@ -81,6 +81,24 @@ function App() {
     fetchSavedConfigurations();
   }, []);
 
+  useEffect(() => {
+    if (!showHistory) {
+      return;
+    }
+    setHistoryLoading(true);
+    fetchSavedConfigurations();
+  }, [showHistory]);
+
+  useEffect(() => {
+    if (!selectedSavedConfig) {
+      return;
+    }
+    const stillExists = savedConfigurations.some((config) => config.id === selectedSavedConfig.id);
+    if (!stillExists) {
+      setSelectedSavedConfig(null);
+    }
+  }, [savedConfigurations, selectedSavedConfig]);
+
   const getConfigContentSignature = (config: SavedConfigurationResponse) => {
     const partIds = [
       config.cpu_data?.id ?? 0,

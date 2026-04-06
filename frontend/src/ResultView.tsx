@@ -135,6 +135,9 @@ function formatCpuModelLabel(entry: CpuSelectionEntryResponse) {
 }
 
 const GAMING_CPU_EXCLUDED_MODELS = new Set([
+  "RYZEN 5 7500F",
+  "RYZEN 5 9500F",
+  "RYZEN 7 8700G",
   "RYZEN 9 9900X",
   "RYZEN 9 9900X3D",
   "RYZEN 9 9950X",
@@ -150,9 +153,15 @@ function sortGamingCpuEntries(entries: CpuSelectionEntryResponse[], mode: "cost"
     .slice()
     .filter((entry) => entry.vendor.toLowerCase() === "amd")
     .filter((entry) => !GAMING_CPU_EXCLUDED_MODELS.has(entry.model_name.replace(/\s+/g, " ").trim().toUpperCase()))
-    .filter((entry) => mode === "cost" ? entry.perf_score > 3000 : true)
     .sort((left, right) => {
       if (mode === "cost") {
+        const leftRank = left.cost_rank ?? Number.MAX_SAFE_INTEGER;
+        const rightRank = right.cost_rank ?? Number.MAX_SAFE_INTEGER;
+
+        if (leftRank !== rightRank) {
+          return leftRank - rightRank;
+        }
+
         const leftValue = left.value_score ?? (left.price && left.price > 0 ? left.perf_score / left.price : 0);
         const rightValue = right.value_score ?? (right.price && right.price > 0 ? right.perf_score / right.price : 0);
 
@@ -811,10 +820,17 @@ export function ResultView({ config, onBack }: ResultProps) {
 
           {isAutoAdjusted && (
             <div className="mb-6 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-              <p className="font-semibold">相場上昇により最低価格を上げました。</p>
+              <p className="font-semibold">相場変動により最低価格を下げました。</p>
               {!isSavedConfiguration(config) && typeof config.recommended_budget_min_for_x3d === "number" && (
                 <p className="mt-1 text-xs text-amber-800">X3D必須構成の推奨下限: {formatCurrency(config.recommended_budget_min_for_x3d)}</p>
               )}
+            </div>
+          )}
+
+          {!isSavedConfiguration(config) && config.message && (
+            <div className="mb-6 rounded-lg border border-sky-300 bg-sky-50 px-4 py-3 text-sm text-sky-900">
+              <p className="font-semibold">選定ポリシーの自動調整</p>
+              <p className="mt-1 text-xs text-sky-800">{config.message}</p>
             </div>
           )}
 
@@ -971,7 +987,7 @@ export function ResultView({ config, onBack }: ResultProps) {
                 <p className="text-sm font-semibold text-emerald-700">
                   {isGamingUsage
                     ? gamingCpuRankingMode === "cost"
-                      ? "ゲーミングCPU順位（AMD・コスパ順）"
+                      ? "ゲーミングCPU選択テーブル（AMD・コスパ重視）"
                       : "ゲーミングCPU順位（AMD・スペック順）"
                     : "CPU選考資料（AMD/Intel）"}
                 </p>
@@ -993,7 +1009,7 @@ export function ResultView({ config, onBack }: ResultProps) {
             {isGamingUsage ? (
               <p className="mb-3 text-xs text-emerald-600">
                 {gamingCpuRankingMode === "cost"
-                  ? "コスパ重視では性能/価格で順位付けしています。"
+                  ? "コスパ重視では性能/価格で選択候補を並べています。"
                   : "スペック重視ではX3Dを優先して性能順に並べています。"}
               </p>
             ) : null}

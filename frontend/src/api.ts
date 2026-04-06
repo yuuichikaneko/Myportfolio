@@ -131,13 +131,25 @@ interface PaginatedResponse<T> {
 export async function generateConfig(
   request: GenerateConfigRequest
 ): Promise<GenerateConfigResponse> {
-  const response = await safeFetch(`${API_BASE_URL}/configurations/generate/`, {
+  const requestPromise = safeFetch(`${API_BASE_URL}/configurations/generate/`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
     },
     body: JSON.stringify(request),
   });
+
+  let timeoutHandle: number | null = null;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeoutHandle = window.setTimeout(() => {
+      reject(new Error("構成生成がタイムアウトしました。条件を緩めるか、もう一度お試しください。"));
+    }, 30000);
+  });
+
+  const response = await Promise.race([requestPromise, timeoutPromise]);
+  if (timeoutHandle !== null) {
+    window.clearTimeout(timeoutHandle);
+  }
 
   if (!response.ok) {
     throw await parseApiError(response, "Failed to generate configuration");
@@ -310,6 +322,7 @@ export interface CpuSelectionEntryResponse {
   perf_score: number;
   price?: number | null;
   value_score?: number | null;
+  cost_rank?: number | null;
   source_url: string;
 }
 
