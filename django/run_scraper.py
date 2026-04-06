@@ -8,7 +8,7 @@ django.setup()
 
 logging.basicConfig(level=logging.INFO)
 
-from scraper.dospara_scraper import scrape_dospara_parts
+from scraper.dospara_scraper import scrape_dospara_parts, scrape_dospara_category_parts
 from scraper.models import PCPart, ScraperStatus
 
 print("=" * 60)
@@ -21,6 +21,19 @@ try:
         timeout=10,
         max_items=50  # 少数の項目のみ
     )
+
+    # カテゴリページも併用して、ローエンドGPUなどの取りこぼしを減らす
+    category_parts = scrape_dospara_category_parts(
+        timeout=10,
+        max_items_per_category=80,
+    )
+    main_keys = {(p['part_type'], p['name']) for p in scraped_parts}
+    for part in category_parts:
+        key = (part['part_type'], part['name'])
+        if key in main_keys:
+            continue
+        scraped_parts.append(part)
+        main_keys.add(key)
     
     print(f"\n[OK] {len(scraped_parts)} 個のパーツを取得しました。")
     
@@ -36,6 +49,8 @@ try:
                 'price': part['price'],
                 'url': part['url'],
                 'specs': part.get('specs', {}),
+                'stock_status': part.get('stock_status', 'unknown'),
+                'is_active': part.get('is_active', True),
             }
         )
         if created:

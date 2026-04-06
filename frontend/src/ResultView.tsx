@@ -150,9 +150,15 @@ function sortGamingCpuEntries(entries: CpuSelectionEntryResponse[], mode: "cost"
     .slice()
     .filter((entry) => entry.vendor.toLowerCase() === "amd")
     .filter((entry) => !GAMING_CPU_EXCLUDED_MODELS.has(entry.model_name.replace(/\s+/g, " ").trim().toUpperCase()))
-    .filter((entry) => mode === "cost" ? entry.perf_score > 3000 : true)
     .sort((left, right) => {
       if (mode === "cost") {
+        const leftRank = left.cost_rank ?? Number.MAX_SAFE_INTEGER;
+        const rightRank = right.cost_rank ?? Number.MAX_SAFE_INTEGER;
+
+        if (leftRank !== rightRank) {
+          return leftRank - rightRank;
+        }
+
         const leftValue = left.value_score ?? (left.price && left.price > 0 ? left.perf_score / left.price : 0);
         const rightValue = right.value_score ?? (right.price && right.price > 0 ? right.perf_score / right.price : 0);
 

@@ -310,6 +310,7 @@ export interface CpuSelectionEntryResponse {
   perf_score: number;
   price?: number | null;
   value_score?: number | null;
+  cost_rank?: number | null;
   source_url: string;
 }
 

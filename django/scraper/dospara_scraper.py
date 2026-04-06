@@ -201,9 +201,13 @@ URL_CATEGORY_HINTS = {
 # パーツ種別ごとの価格帯取得用カテゴリページ URL
 # ドスパラはURLパスの大文字小文字が厳密なため、小文字に統一する。
 PART_CATEGORY_URLS: Dict[str, List[str]] = {
-    "cpu":         ["https://www.dospara.co.jp/cpu", "https://www.dospara.co.jp/BR11", "https://www.dospara.co.jp/BR10"],
+    "cpu":         ["https://www.dospara.co.jp/cpu", "https://www.dospara.co.jp/BR11", "https://www.dospara.co.jp/BR10?srule=03&includeNotInventory=false"],
     "cpu_cooler":  ["https://www.dospara.co.jp/BR95"],
-    "gpu":         ["https://www.dospara.co.jp/BR31"],
+    "gpu":         [
+        "https://www.dospara.co.jp/BR31",
+        "https://www.dospara.co.jp/nvidia-geforce?prefn1=txChipFilter&prefv1=GeForce%20RTX%203050%7cGeForce%20GTX%201660%20SUPER%7cGeForce%20GTX%201660&srule=01&includeNotInventory=false",
+        "https://www.dospara.co.jp/BR31?prefn1=txChipFilter&prefv1=Radeon%20RX%207600%7cRadeon%20RX%206600%7cRadeon%20RX%206400&srule=01&includeNotInventory=false",
+    ],
     "motherboard": ["https://www.dospara.co.jp/BR21", "https://www.dospara.co.jp/mb-intel", "https://www.dospara.co.jp/mb-amd"],
     "memory":      [
         "https://www.dospara.co.jp/mem-desktop?srule=03&includeNotInventory=false",
@@ -232,6 +236,42 @@ DOSPARA_INTEL_CPU_PERFORMANCE_URL = "https://www.dospara.co.jp/5info/cts_lp_inte
 
 PRICE_IN_HTML_PATTERN = re.compile(r"([1-9][0-9]{1,2},[0-9]{3})")
 INTEL_13_14_GEN_PATTERN = re.compile(r"\bCORE\s+I[3579]\s*[- ]?\s*1[34]\d{3}[A-Z]*\b", re.IGNORECASE)
+
+STOCK_IN_STOCK_HINTS = (
+    '在庫あり',
+    '在庫有り',
+    '即納',
+    '翌日出荷',
+    '当日出荷',
+    'available',
+    'in stock',
+)
+
+STOCK_OUT_OF_STOCK_HINTS = (
+    '在庫切れ',
+    '在庫なし',
+    '欠品',
+    '販売終了',
+    '取扱終了',
+    '完売',
+    '入荷待ち',
+    'sold out',
+    'out of stock',
+    'unavailable',
+    'backorder',
+)
+
+
+def _normalize_stock_status(raw_status: str) -> str:
+    text = str(raw_status or '').strip().lower()
+    if not text:
+        return 'unknown'
+
+    if any(hint in text for hint in STOCK_OUT_OF_STOCK_HINTS):
+        return 'out_of_stock'
+    if any(hint in text for hint in STOCK_IN_STOCK_HINTS):
+        return 'in_stock'
+    return 'unknown'
 
 
 def _normalize_price(price_text: str) -> Optional[int]:
@@ -1241,6 +1281,11 @@ def _build_parts_from_products_map(
             "parser": "products_api",
             "code": code,
         }
+        raw_stock_text = (info.get("stkname") or "").strip()
+        if raw_stock_text:
+            part_specs["stock_text"] = raw_stock_text
+        normalized_stock_status = _normalize_stock_status(raw_stock_text)
+        part_specs["stock_status"] = normalized_stock_status
         part_specs.update(extracted)
 
         collected.append(
@@ -1250,6 +1295,8 @@ def _build_parts_from_products_map(
                 "price": price,
                 "url": full_url,
                 "specs": part_specs,
+                "stock_status": normalized_stock_status,
+                "is_active": normalized_stock_status != 'out_of_stock',
             }
         )
 
