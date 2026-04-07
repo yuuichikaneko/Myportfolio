@@ -344,6 +344,23 @@ class ScraperStatus(models.Model):
         return f"Scraper Status (Last: {self.last_run})"
 
 
+class MarketPriceRangeSnapshot(models.Model):
+    """相場レンジの取得スナップショット。構成生成時は本テーブルを参照する。"""
+    source_name = models.CharField(max_length=80, db_index=True, default='dospara_tc30_market')
+    market_min = models.IntegerField()
+    market_max = models.IntegerField()
+    suggested_default = models.IntegerField()
+    currency = models.CharField(max_length=3, default='JPY')
+    sources = models.JSONField(default=dict, blank=True)
+    fetched_at = models.DateTimeField(default=timezone.now, db_index=True)
+
+    class Meta:
+        ordering = ['-fetched_at']
+
+    def __str__(self):
+        return f"{self.source_name} @ {self.fetched_at:%Y-%m-%d %H:%M:%S}"
+
+
 class GPUPerformanceSnapshot(models.Model):
     """GPU性能比較ソースの取り込みスナップショット。"""
     source_name = models.CharField(max_length=80, db_index=True)

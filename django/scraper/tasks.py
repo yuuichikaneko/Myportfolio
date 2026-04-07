@@ -8,12 +8,14 @@ from django.db import transaction
 from django.utils import timezone
 from .dospara_scraper import (
     _infer_part_type,
+    fetch_dospara_cpu_selection_material,
     fetch_dospara_gpu_performance_table,
+    fetch_dospara_market_price_range,
     get_dospara_scraper_config,
     scrape_dospara_parts,
     scrape_dospara_category_parts,
 )
-from .models import GPUPerformanceEntry, GPUPerformanceSnapshot, PCPart, ScraperStatus
+from .models import CPUSelectionEntry, CPUSelectionSnapshot, GPUPerformanceEntry, GPUPerformanceSnapshot, MarketPriceRangeSnapshot, PCPart, ScraperStatus
 
 
 logger = logging.getLogger(__name__)
@@ -204,6 +206,78 @@ def import_gpu_performance_scores_task(timeout=20):
     }
 
 
+@shared_task
+def import_market_price_range_task(timeout=20):
+    """Import market price range from Dospara and persist snapshot for DB-first reads."""
+    data = fetch_dospara_market_price_range(timeout=timeout)
+    market_min = int(data.get('min') or 0)
+    market_max = int(data.get('max') or 0)
+    suggested_default = int(data.get('default') or 0)
+
+    if market_min <= 0 or market_max <= 0 or market_max <= market_min:
+        raise ValueError('invalid market price range from scraper')
+
+    snapshot = MarketPriceRangeSnapshot.objects.create(
+        source_name='dospara_tc30_market',
+        market_min=market_min,
+        market_max=market_max,
+        suggested_default=suggested_default,
+        currency=str(data.get('currency') or 'JPY'),
+        sources=data.get('sources') or {},
+    )
+
+    return {
+        'status': 'success',
+        'snapshot_id': snapshot.id,
+        'min': market_min,
+        'max': market_max,
+        'default': suggested_default,
+    }
+
+
+@shared_task
+def import_cpu_selection_material_task(timeout=20):
+    """Import CPU selection material and persist normalized snapshot/entry tables."""
+    data = fetch_dospara_cpu_selection_material(timeout=timeout, exclude_intel_13_14=True)
+    entries = data.get('entries', []) or []
+
+    with transaction.atomic():
+        snapshot = CPUSelectionSnapshot.objects.create(
+            source_name=data.get('source_name', 'dospara_cpu_comparison_pages'),
+            source_urls=data.get('source_urls', []) or [],
+            exclude_intel_13_14=bool(data.get('exclude_intel_13_14', True)),
+            entry_count=int(data.get('entry_count', len(entries)) or len(entries)),
+            excluded_count=int(data.get('excluded_count', 0) or 0),
+            parser_version=str(data.get('parser_version', 'v1') or 'v1'),
+            fetched_at=timezone.now(),
+        )
+
+        rows = []
+        for rank_global, entry in enumerate(sorted(entries, key=lambda row: int(row.get('perf_score', 0) or 0), reverse=True), 1):
+            model_name = str(entry.get('model_name', '') or '').strip()
+            perf_score = int(entry.get('perf_score', 0) or 0)
+            if not model_name or perf_score <= 0:
+                continue
+            rows.append(CPUSelectionEntry(
+                snapshot=snapshot,
+                vendor=str(entry.get('vendor', '') or 'unknown').lower(),
+                model_name=model_name,
+                perf_score=perf_score,
+                source_url=str(entry.get('source_url', '') or ''),
+                rank_global=rank_global,
+            ))
+
+        if rows:
+            CPUSelectionEntry.objects.bulk_create(rows, batch_size=500)
+
+    return {
+        'status': 'success',
+        'snapshot_id': snapshot.id,
+        'entry_count': len(rows),
+        'excluded_count': int(snapshot.excluded_count or 0),
+    }
+
+
 def _normalize_part_types():
     changed = 0
     merged = 0
@@ -282,11 +356,25 @@ def run_scraper_task():
 
         normalized_count, merged_count = _normalize_part_types()
         gpu_perf_result = {}
+        market_range_result = {}
+        cpu_selection_result = {}
         try:
             gpu_perf_result = import_gpu_performance_scores_task(timeout=scraper_config['timeout'])
         except Exception:
             logger.exception('gpu_perf_import_failed source=dospara_gpu_performance')
             gpu_perf_result = {'status': 'error'}
+
+        try:
+            market_range_result = import_market_price_range_task(timeout=scraper_config['timeout'])
+        except Exception:
+            logger.exception('market_range_import_failed source=dospara_tc30_market')
+            market_range_result = {'status': 'error'}
+
+        try:
+            cpu_selection_result = import_cpu_selection_material_task(timeout=scraper_config['timeout'])
+        except Exception:
+            logger.exception('cpu_selection_import_failed source=dospara_cpu_comparison_pages')
+            cpu_selection_result = {'status': 'error'}
 
         status.last_run = timezone.now()
         status.next_run = timezone.now() + timedelta(days=1)
@@ -296,13 +384,15 @@ def run_scraper_task():
 
         updated_count = len(scraped_parts) - saved_count
         logger.info(
-            'scraper_task_completed source=dospara_parts fetched=%s created=%s updated=%s normalized=%s merged=%s gpu_perf=%s',
+            'scraper_task_completed source=dospara_parts fetched=%s created=%s updated=%s normalized=%s merged=%s gpu_perf=%s market_range=%s cpu_selection=%s',
             len(scraped_parts),
             saved_count,
             updated_count,
             normalized_count,
             merged_count,
             gpu_perf_result,
+            market_range_result,
+            cpu_selection_result,
         )
 
         return {
@@ -314,6 +404,8 @@ def run_scraper_task():
             'normalized': normalized_count,
             'merged': merged_count,
             'gpu_perf': gpu_perf_result,
+            'market_range': market_range_result,
+            'cpu_selection': cpu_selection_result,
         }
     except Exception as e:
         status.last_run = timezone.now()
