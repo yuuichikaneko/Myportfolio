@@ -155,6 +155,132 @@ class ScraperApiTests(APITestCase):
 		self.assertIsNotNone(picked)
 		self.assertNotIn('UX150-L', picked.name)
 
+	def test_pick_part_by_target_prefers_microatx_case_for_microatx_motherboard(self):
+		PCPart.objects.create(
+			part_type='case',
+			name='Value Mid Tower (ATX)',
+			price=3000,
+			specs={},
+			url='https://example.com/case-atx',
+		)
+		PCPart.objects.create(
+			part_type='case',
+			name='Compact Airflow Case (MicroATX)',
+			price=5000,
+			specs={},
+			url='https://example.com/case-matx',
+		)
+
+		picked = _pick_part_by_target(
+			'case',
+			budget=285978,
+			usage='gaming',
+			options={
+				'case_size': 'mid',
+				'motherboard_form_factor': 'micro-atx',
+				'build_priority': 'cost',
+			},
+		)
+
+		self.assertIsNotNone(picked)
+		self.assertIn('microatx', picked.name.lower())
+
+	def test_gaming_cost_mode_excludes_flagship_cpu_motherboard_memory(self):
+		"""gaming + cost モードでフラッグシップパーツが除外されることを確認"""
+		# フラッグシップCPU
+		flagship_cpu = PCPart.objects.create(
+			part_type='cpu',
+			name='Ryzen 9 9850X3D',
+			price=87980,
+			specs={'specs_text': ''},
+			url='https://example.com/9850x3d',
+		)
+		# 中級CPU（優先）
+		mid_cpu = PCPart.objects.create(
+			part_type='cpu',
+			name='Ryzen 7 7700X3D',
+			price=48000,
+			specs={'specs_text': 'Ryzen 7 7700X3D'},
+			url='https://example.com/7700x3d',
+		)
+
+		# フラッグシップマザーボード
+		flagship_mb = PCPart.objects.create(
+			part_type='motherboard',
+			name='ASUS ROG STRIX X870E-E GAMING WIFI',
+			price=57660,
+			specs={'specs_text': 'X870E'},
+			url='https://example.com/x870e-mb',
+		)
+		# 中級マザーボード（優先）
+		mid_mb = PCPart.objects.create(
+			part_type='motherboard',
+			name='ASUS TUF GAMING X870-PLUS',
+			price=35980,
+			specs={'specs_text': 'X870'},
+			url='https://example.com/x870-mb',
+		)
+
+		# 高速メモリ（除外）
+		high_speed_mem = PCPart.objects.create(
+			part_type='memory',
+			name='G.SKILL Flare X5 DDR5 PC5-44800 CL38 48GB',
+			price=158800,
+			specs={'specs_text': 'DDR5-5600 PC5-44800 48GB'},
+			url='https://example.com/ddr5-high-speed',
+		)
+		# 標準メモリ（優先）
+		mid_speed_mem = PCPart.objects.create(
+			part_type='memory',
+			name='Kingston Fury Beast DDR5 PC5-38400 CL38 32GB',
+			price=89800,
+			specs={'specs_text': 'DDR5-4800 PC5-38400 32GB'},
+			url='https://example.com/ddr5-mid-speed',
+		)
+
+		# gaming + cost: CPU は mid_cpu 選択
+		picked_cpu = _pick_part_by_target(
+			'cpu',
+			budget=574980,
+			usage='gaming',
+			options={
+				'build_priority': 'cost',
+				'cpu_vendor': 'amd',
+			},
+		)
+		self.assertIsNotNone(picked_cpu)
+		self.assertNotIn('9850x3d', picked_cpu.name.lower(), 
+						msg=f"gaming+cost should exclude 9850X3D, got {picked_cpu.name}")
+
+		# gaming + cost: motherboard は mid_mb 選択（X870E除外）
+		picked_mb = _pick_part_by_target(
+			'motherboard',
+			budget=574980,
+			usage='gaming',
+			options={
+				'build_priority': 'cost',
+				'cpu_socket': None,
+			},
+		)
+		self.assertIsNotNone(picked_mb)
+		self.assertNotIn('x870e', picked_mb.name.lower(),
+						msg=f"gaming+cost should exclude X870E, got {picked_mb.name}")
+
+		# gaming + cost: memory は mid_speed_mem 選択（高速メモリ除外）
+		picked_mem = _pick_part_by_target(
+			'memory',
+			budget=574980,
+			usage='gaming',
+			options={
+				'build_priority': 'cost',
+			},
+		)
+		self.assertIsNotNone(picked_mem)
+		self.assertNotIn('pc5-44800', picked_mem.name.lower(),
+						msg=f"gaming+cost should exclude PC5-44800, got {picked_mem.name}")
+		self.assertNotIn('pc5-48000', picked_mem.name.lower(),
+						msg=f"gaming+cost should exclude PC5-48000, got {picked_mem.name}")
+
 	def test_enforce_gaming_spec_best_value_gpu_prefers_exact_5060_over_5060_ti(self):
 		high_gpu = PCPart.objects.create(
 			part_type='gpu',

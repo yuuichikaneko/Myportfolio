@@ -218,4 +218,28 @@ describe("ResultView", () => {
     expect(screen.getByText("保存済み構成ID: 787")).toBeInTheDocument();
     expect(screen.queryByText("新規生成ID: 787")).not.toBeInTheDocument();
   });
+
+  it("shows market budget correction note when market adjustment is applied", async () => {
+    const config: GenerateConfigResponse = {
+      usage: "gaming",
+      build_priority: "spec",
+      budget: 520000,
+      requested_budget: 574980,
+      budget_auto_adjusted: true,
+      market_budget_adjusted: true,
+      market_budget_note: "相場データに基づき、ハイエンド予算を¥520,000へ補正しました。",
+      configuration_id: 3,
+      total_price: 498000,
+      estimated_power_w: 560,
+      parts: [
+        { category: "cpu", name: "Ryzen 7 9800X3D BOX", price: 62180, url: "https://example.com/cpu" },
+        { category: "gpu", name: "RTX 5070", price: 90000, url: "https://example.com/gpu" },
+      ],
+    };
+
+    render(<ResultView config={config} onBack={() => {}} />);
+
+    expect(screen.getByText("相場変動により補正しました。")).toBeInTheDocument();
+    expect(screen.getByText("相場データに基づき、ハイエンド予算を¥520,000へ補正しました。")).toBeInTheDocument();
+  });
 });

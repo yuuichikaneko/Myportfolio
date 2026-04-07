@@ -1,7 +1,7 @@
 import logging
 import re
 from typing import Dict, List, Optional
-from urllib.parse import quote, urljoin
+from urllib.parse import parse_qs, quote, urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -221,12 +221,7 @@ PART_CATEGORY_URLS: Dict[str, List[str]] = {
 }
 
 MARKET_BRAND_URLS = {
-    "galleria_gaming": "https://www.dospara.co.jp/gamepc",
-    "galleria_creator": "https://www.dospara.co.jp/create",
-    "thirdwave_gpu": "https://www.dospara.co.jp/TC973",
-    "thirdwave_note": "https://www.dospara.co.jp/general_note",
-    "thirdwave_desktop": "https://www.dospara.co.jp/general_desk",
-    "thirdwave_business": "https://www.dospara.co.jp/business",
+    "dospara_tc30_market": "https://www.dospara.co.jp/TC30?pmax=2%2C500%2C000.00&srule=04&includeNotInventory=false",
 }
 
 DOSPARA_GPU_PERFORMANCE_URL = "https://www.dospara.co.jp/5shopping/shp_vga_def_parts.html"
@@ -234,7 +229,7 @@ GPU_PERF_SCORE_NOTE = "Dospara独自の参考値（定期見直しあり）"
 DOSPARA_AMD_CPU_PERFORMANCE_URL = "https://www.dospara.co.jp/5info/cts_lp_amd_cpu.html"
 DOSPARA_INTEL_CPU_PERFORMANCE_URL = "https://www.dospara.co.jp/5info/cts_lp_intel_cpu.html"
 
-PRICE_IN_HTML_PATTERN = re.compile(r"([1-9][0-9]{1,2},[0-9]{3})")
+PRICE_IN_HTML_PATTERN = re.compile(r"([1-9][0-9]{0,2}(?:,[0-9]{3})+)")
 INTEL_13_14_GEN_PATTERN = re.compile(r"\bCORE\s+I[3579]\s*[- ]?\s*1[34]\d{3}[A-Z]*\b", re.IGNORECASE)
 
 STOCK_IN_STOCK_HINTS = (
@@ -287,9 +282,83 @@ def _extract_market_prices(html: str) -> List[int]:
         normalized = _normalize_price(match.group(1))
         if normalized is None:
             continue
-        # 現実的なBTO PC価格帯のみに絞る
-        if 70000 <= normalized <= 1200000:
+        # TC30のpmax=2,500,000に合わせ、ハイエンド帯の上限価格も含める。
+        if 70000 <= normalized <= 2500000:
             prices.append(normalized)
+    return prices
+
+
+def _extract_market_total_count(html: str) -> Optional[int]:
+    # 例: "全 1,087 件"
+    match = re.search(r"全\s*([0-9,]+)\s*件", html or "")
+    if not match:
+        return None
+    return _normalize_price(match.group(1))
+
+
+def _flatten_query_params(url: str) -> Dict[str, str]:
+    parsed = urlparse(url)
+    raw_params = parse_qs(parsed.query)
+    return {key: values[-1] for key, values in raw_params.items() if values}
+
+
+def _collect_market_prices_from_paginated_grid(
+    first_html: str,
+    category_url: str,
+    headers: Dict[str, str],
+    timeout: int,
+    session: Optional[requests.Session],
+    page_size: int = 60,
+    max_pages: int = 120,
+) -> List[int]:
+    prices: List[int] = []
+    prices.extend(_extract_market_prices(first_html))
+
+    cgid = _extract_category_id(category_url)
+    if not cgid:
+        return prices
+
+    total_count = _extract_market_total_count(first_html)
+    query_params = _flatten_query_params(category_url)
+    client = session or requests.Session()
+
+    seen_page_signatures = set()
+
+    for page_idx in range(1, max_pages + 1):
+        start = page_idx * page_size
+        if total_count is not None and start >= total_count:
+            break
+
+        params = {
+            "cgid": cgid,
+            "start": start,
+            "sz": page_size,
+        }
+        # URLに指定された絞り込み条件（srule/pmax/includeNotInventory など）を維持する。
+        for key, value in query_params.items():
+            if key in {"pageno", "cgid", "start", "sz"}:
+                continue
+            params[key] = value
+
+        response = client.get(
+            DOSPARA_UPDATE_GRID_URL,
+            params=params,
+            headers=headers,
+            timeout=timeout,
+        )
+        response.raise_for_status()
+
+        html = response.text or ""
+        page_signature = hash(html[:2000])
+        if page_signature in seen_page_signatures:
+            break
+        seen_page_signatures.add(page_signature)
+
+        page_prices = _extract_market_prices(html)
+        if not page_prices:
+            break
+        prices.extend(page_prices)
+
     return prices
 
 
@@ -304,7 +373,13 @@ def fetch_dospara_market_price_range(timeout: int = 15, session: Optional[reques
         try:
             response = client.get(url, headers=headers, timeout=timeout)
             response.raise_for_status()
-            prices = _extract_market_prices(response.text)
+            prices = _collect_market_prices_from_paginated_grid(
+                first_html=response.text,
+                category_url=url,
+                headers=headers,
+                timeout=timeout,
+                session=client,
+            )
             if not prices:
                 per_brand[brand] = {"url": url, "min": None, "max": None, "count": 0}
                 continue
