@@ -3,7 +3,7 @@ from rest_framework.test import APITestCase, APIRequestFactory
 from unittest.mock import patch
 from django.test import override_settings
 
-from .models import Configuration, CPUSelectionEntry, CPUSelectionSnapshot, GPUPerformanceEntry, GPUPerformanceSnapshot, PCPart, ScraperStatus
+from .models import Configuration, CPUSelectionEntry, CPUSelectionSnapshot, GPUPerformanceEntry, GPUPerformanceSnapshot, MarketPriceRangeSnapshot, PCPart, ScraperStatus
 from .dospara_scraper import (
 	get_dospara_scraper_config,
 	parse_dospara_parts_html,
@@ -13,7 +13,7 @@ from .dospara_scraper import (
 	fetch_dospara_cpu_selection_material,
 )
 from .tasks import run_scraper_task
-from .views import ConfigurationViewSet, _enforce_gaming_spec_best_value_gpu, _enforce_memory_speed_floor, _get_gpu_perf_score_from_snapshot, _infer_gaming_gpu_tier_label, _infer_memory_speed_mhz, _infer_storage_capacity_gb, _is_part_suitable, _matches_selection_options, _pick_amd_gaming_cpu, _pick_gaming_cost_gpu_for_auto_adjust, _pick_part_by_target, _prefer_higher_gaming_cost_x3d_cpu, _rebalance_gaming_cost_cpu_to_storage, _recommend_min_budget_for_gaming_x3d_from_low_end_config, build_configuration_response
+from .views import ConfigurationViewSet, _enforce_gaming_spec_best_value_gpu, _enforce_memory_speed_floor, _get_gpu_perf_score_from_snapshot, _infer_gaming_gpu_tier_label, _infer_memory_speed_mhz, _infer_storage_capacity_gb, _is_gaming_gpu_within_priority_cap, _is_part_suitable, _matches_selection_options, _pick_amd_gaming_cpu, _pick_gaming_cost_gpu_for_auto_adjust, _pick_part_by_target, _prefer_higher_gaming_cost_x3d_cpu, _rebalance_gaming_cost_cpu_to_storage, _recommend_min_budget_for_gaming_x3d_from_low_end_config, build_configuration_response
 
 
 class ScraperApiTests(APITestCase):
@@ -39,6 +39,272 @@ class ScraperApiTests(APITestCase):
 			cache_enabled=True,
 			cache_ttl_seconds=1800,
 		)
+
+	def _seed_high_band_market_snapshot(self):
+		MarketPriceRangeSnapshot.objects.create(
+			market_min=180000,
+			market_max=1300000,
+			suggested_default=729980,
+			currency='JPY',
+			sources={'dospara_tc30_market': {'count': 120}},
+		)
+
+	def _seed_minimum_parts_for_high_band_cpu_e2e(self):
+		PCPart.objects.create(
+			part_type='cpu',
+			name='AMD Ryzen 7 9800X3D BOX',
+			price=62180,
+			specs={'socket': 'AM5'},
+			url='https://example.com/cpu-9800x3d-e2e',
+		)
+		PCPart.objects.create(
+			part_type='cpu',
+			name='AMD Ryzen 9 9850X3D BOX',
+			price=87980,
+			specs={'socket': 'AM5'},
+			url='https://example.com/cpu-9850x3d-e2e',
+		)
+		PCPart.objects.create(
+			part_type='gpu',
+			name='NVIDIA GeForce RTX 5070 12GB E2E',
+			price=99800,
+			specs={'vram': '12GB'},
+			url='https://example.com/gpu-5070-e2e',
+		)
+		PCPart.objects.create(
+			part_type='gpu',
+			name='NVIDIA GeForce RTX 5080 16GB E2E',
+			price=149800,
+			specs={'vram': '16GB'},
+			url='https://example.com/gpu-5080-e2e',
+		)
+		PCPart.objects.create(
+			part_type='motherboard',
+			name='B650 E2E Board',
+			price=22000,
+			specs={'socket': 'AM5', 'memory_type': 'DDR5', 'form_factor': 'ATX'},
+			url='https://example.com/mb-b650-e2e',
+		)
+		PCPart.objects.create(
+			part_type='memory',
+			name='DDR5 16GB E2E',
+			price=12000,
+			specs={'memory_type': 'DDR5', 'capacity_gb': 16, 'speed_mhz': 5600},
+			url='https://example.com/mem-ddr5-16-e2e',
+		)
+		PCPart.objects.create(
+			part_type='memory',
+			name='DDR5 96GB E2E',
+			price=14000,
+			specs={'memory_type': 'DDR5', 'capacity_gb': 96, 'speed_mhz': 5600},
+			url='https://example.com/mem-ddr5-96-e2e',
+		)
+		PCPart.objects.create(
+			part_type='memory',
+			name='DDR5 128GB E2E',
+			price=15000,
+			specs={'memory_type': 'DDR5', 'capacity_gb': 128, 'speed_mhz': 5600},
+			url='https://example.com/mem-ddr5-128-e2e',
+		)
+		PCPart.objects.create(
+			part_type='storage',
+			name='NVMe 1TB E2E',
+			price=12000,
+			specs={'interface': 'NVMe', 'capacity_gb': 1000},
+			url='https://example.com/storage-nvme-1tb-e2e',
+		)
+		PCPart.objects.create(
+			part_type='storage',
+			name='NVMe 2TB E2E',
+			price=10000,
+			specs={'interface': 'NVMe', 'capacity_gb': 2000},
+			url='https://example.com/storage-nvme-2tb-e2e',
+		)
+		PCPart.objects.create(
+			part_type='cpu_cooler',
+			name='Air Cooler E2E',
+			price=5500,
+			specs={'supported_sockets': ['AM5']},
+			url='https://example.com/cooler-air-e2e',
+		)
+		PCPart.objects.create(
+			part_type='case',
+			name='ATX Case E2E',
+			price=7000,
+			specs={'supported_form_factors': ['ATX']},
+			url='https://example.com/case-atx-e2e',
+		)
+		PCPart.objects.create(
+			part_type='psu',
+			name='850W PSU E2E',
+			price=12000,
+			specs={'wattage': 850},
+			url='https://example.com/psu-850-e2e',
+		)
+
+	def test_generate_config_high_cost_cpu_is_capped_at_9800x3d_e2e(self):
+		self._seed_high_band_market_snapshot()
+		self._seed_minimum_parts_for_high_band_cpu_e2e()
+
+		response = self.client.post(
+			'/api/generate-config/',
+			{'budget': 400000, 'usage': 'gaming', 'build_priority': 'cost', 'os_edition': 'home'},
+			format='json',
+		)
+
+		self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+		parts = {p['category']: p for p in response.data['parts']}
+		self.assertIn('cpu', parts)
+		cpu_name = str(parts['cpu']['name']).lower()
+		self.assertIn('9800x3d', cpu_name)
+		self.assertNotIn('9850x3d', cpu_name)
+		self.assertIn('memory', parts)
+		self.assertIn('storage', parts)
+		self.assertNotIn('96gb', str(parts['memory']['name']).lower())
+		self.assertNotIn('128gb', str(parts['memory']['name']).lower())
+		self.assertNotIn('2tb', str(parts['storage']['name']).lower())
+
+	def test_generate_config_high_spec_cpu_is_capped_at_9800x3d_e2e(self):
+		self._seed_high_band_market_snapshot()
+		self._seed_minimum_parts_for_high_band_cpu_e2e()
+
+		response = self.client.post(
+			'/api/generate-config/',
+			{'budget': 400000, 'usage': 'gaming', 'build_priority': 'spec', 'os_edition': 'home'},
+			format='json',
+		)
+
+		self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+		parts = {p['category']: p for p in response.data['parts']}
+		self.assertIn('cpu', parts)
+		cpu_name = str(parts['cpu']['name']).lower()
+		self.assertIn('9800x3d', cpu_name)
+		self.assertNotIn('9850x3d', cpu_name)
+		self.assertIn('memory', parts)
+		self.assertIn('storage', parts)
+		self.assertNotIn('96gb', str(parts['memory']['name']).lower())
+		self.assertNotIn('128gb', str(parts['memory']['name']).lower())
+		self.assertNotIn('2tb', str(parts['storage']['name']).lower())
+
+	def test_generate_config_premium_cost_applies_memory_storage_caps_e2e(self):
+		self._seed_high_band_market_snapshot()
+		self._seed_minimum_parts_for_high_band_cpu_e2e()
+
+		response = self.client.post(
+			'/api/generate-config/',
+			{'budget': 574980, 'usage': 'gaming', 'build_priority': 'cost', 'os_edition': 'home'},
+			format='json',
+		)
+
+		self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+		parts = {p['category']: p for p in response.data['parts']}
+		self.assertIn('memory', parts)
+		self.assertIn('storage', parts)
+		self.assertIn('2tb', str(parts['storage']['name']).lower())
+
+	def test_generate_config_spec_secures_storage_capacity_target(self):
+		PCPart.objects.create(
+			part_type='cpu',
+			name='AMD Ryzen 7 9850X3D BOX Test',
+			price=87980,
+			specs={'socket': 'AM5'},
+			url='https://example.com/cpu-9850x3d-spec-storage',
+		)
+		PCPart.objects.create(
+			part_type='gpu',
+			name='GeForce RTX 5080 16GB Expensive Test',
+			price=249800,
+			specs={'vram': '16GB'},
+			url='https://example.com/gpu-5080-expensive-test',
+		)
+		PCPart.objects.create(
+			part_type='gpu',
+			name='GeForce RTX 5070 12GB Cheaper Test',
+			price=139800,
+			specs={'vram': '12GB'},
+			url='https://example.com/gpu-5070-cheaper-test',
+		)
+		PCPart.objects.create(
+			part_type='motherboard',
+			name='B650 Spec Storage Test Board',
+			price=35980,
+			specs={'socket': 'AM5', 'memory_type': 'DDR5', 'form_factor': 'ATX'},
+			url='https://example.com/mb-spec-storage-test',
+		)
+		PCPart.objects.create(
+			part_type='memory',
+			name='DDR5 32GB Spec Storage Test',
+			price=21480,
+			specs={'memory_type': 'DDR5', 'capacity_gb': 32, 'speed_mhz': 5600},
+			url='https://example.com/memory-spec-storage-test',
+		)
+		PCPart.objects.create(
+			part_type='storage',
+			name='ADATA ALEG-710-512GCS (M.2 2280 512GB) Test',
+			price=13480,
+			specs={'interface': 'NVMe', 'capacity_gb': 512},
+			url='https://example.com/storage-512-spec-test',
+		)
+		PCPart.objects.create(
+			part_type='storage',
+			name='ADATA LEGEND 710 1TB Expensive Test',
+			price=41800,
+			specs={'interface': 'NVMe', 'capacity_gb': 1000},
+			url='https://example.com/storage-1tb-spec-test',
+		)
+		PCPart.objects.create(
+			part_type='cpu_cooler',
+			name='Air Cooler Spec Storage Test',
+			price=19990,
+			specs={'supported_sockets': ['AM5']},
+			url='https://example.com/cooler-spec-storage-test',
+		)
+		PCPart.objects.create(
+			part_type='case',
+			name='ATX Case Spec Storage Test',
+			price=5680,
+			specs={'supported_form_factors': ['ATX']},
+			url='https://example.com/case-spec-storage-test',
+		)
+		PCPart.objects.create(
+			part_type='psu',
+			name='1000W PSU Spec Storage Test',
+			price=16580,
+			specs={'wattage': 1000},
+			url='https://example.com/psu-spec-storage-test',
+		)
+
+		response = self.client.post(
+			'/api/generate-config/',
+			{'budget': 574980, 'usage': 'gaming', 'build_priority': 'spec', 'os_edition': 'home'},
+			format='json',
+		)
+
+		self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+		parts = {p['category']: p for p in response.data['parts']}
+		self.assertIn('storage', parts)
+		self.assertIn('gpu', parts)
+		self.assertIn('1tb', str(parts['storage']['name']).lower())
+		self.assertLessEqual(int(response.data.get('total_price', 0)), 574980)
+
+	def test_generate_config_lower_premium_spec_avoids_9850_and_5080(self):
+		self._seed_high_band_market_snapshot()
+		self._seed_minimum_parts_for_high_band_cpu_e2e()
+
+		response = self.client.post(
+			'/api/generate-config/',
+			{'budget': 574980, 'usage': 'gaming', 'build_priority': 'spec', 'os_edition': 'home'},
+			format='json',
+		)
+
+		self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+		parts = {p['category']: p for p in response.data['parts']}
+		cpu_name = str(parts['cpu']['name']).lower()
+		gpu_name = str(parts['gpu']['name']).lower()
+		self.assertNotIn('9850x3d', cpu_name)
+		self.assertIn('9800x3d', cpu_name)
+		self.assertNotIn('5080', gpu_name)
+		self.assertIn('2tb', str(parts['storage']['name']).lower())
 
 	def _create_low_end_gpu(self, name='RTX 3050 6GB Test', price=31800):
 		return PCPart.objects.create(
@@ -102,6 +368,34 @@ class ScraperApiTests(APITestCase):
 				url='https://example.com/gpu',
 			)
 			self.assertEqual(_infer_gaming_gpu_tier_label(part), expected)
+
+	def test_high_cost_gpu_cap_allows_5070_and_9070xt_but_not_5080(self):
+		budget = 400000  # high帯
+		rtx5070 = PCPart(part_type='gpu', name='GeForce RTX 5070 12GB', price=0, specs={}, url='https://example.com/5070')
+		rx9070xt = PCPart(part_type='gpu', name='Radeon RX 9070 XT 16GB', price=0, specs={}, url='https://example.com/9070xt')
+		rtx5080 = PCPart(part_type='gpu', name='GeForce RTX 5080 16GB', price=0, specs={}, url='https://example.com/5080')
+
+		self.assertTrue(_is_gaming_gpu_within_priority_cap(rtx5070, 'cost', budget=budget))
+		self.assertTrue(_is_gaming_gpu_within_priority_cap(rx9070xt, 'cost', budget=budget))
+		self.assertFalse(_is_gaming_gpu_within_priority_cap(rtx5080, 'cost', budget=budget))
+
+	def test_high_spec_gpu_cap_allows_5080_but_blocks_5090(self):
+		budget = 400000  # high帯
+		rtx5080 = PCPart(part_type='gpu', name='GeForce RTX 5080 16GB', price=0, specs={}, url='https://example.com/5080')
+		rtx5090 = PCPart(part_type='gpu', name='GeForce RTX 5090 32GB', price=0, specs={}, url='https://example.com/5090')
+
+		self.assertTrue(_is_gaming_gpu_within_priority_cap(rtx5080, 'spec', budget=budget))
+		self.assertFalse(_is_gaming_gpu_within_priority_cap(rtx5090, 'spec', budget=budget))
+    
+	def test_premium_cost_gpu_cap_blocks_5080(self):
+		budget = 574980  # premium帯
+		rtx5070 = PCPart(part_type='gpu', name='GeForce RTX 5070 12GB', price=0, specs={}, url='https://example.com/5070')
+		rtx5070ti = PCPart(part_type='gpu', name='GeForce RTX 5070 Ti 16GB', price=0, specs={}, url='https://example.com/5070ti')
+		rtx5080 = PCPart(part_type='gpu', name='GeForce RTX 5080 16GB', price=0, specs={}, url='https://example.com/5080')
+
+		self.assertTrue(_is_gaming_gpu_within_priority_cap(rtx5070, 'cost', budget=budget))
+		self.assertFalse(_is_gaming_gpu_within_priority_cap(rtx5070ti, 'cost', budget=budget))
+		self.assertFalse(_is_gaming_gpu_within_priority_cap(rtx5080, 'cost', budget=budget))
 
 	def test_matches_selection_options_rejects_ux150_l_for_am5(self):
 		cooler = PCPart.objects.create(

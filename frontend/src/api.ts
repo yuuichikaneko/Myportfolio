@@ -138,6 +138,7 @@ export async function generateConfig(
     headers: {
       "Content-Type": "application/json",
     },
+    cache: "no-store",
     body: JSON.stringify(request),
   });
 

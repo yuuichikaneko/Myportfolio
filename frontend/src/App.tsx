@@ -152,6 +152,8 @@ function App() {
   ) => {
     setIsLoading(true);
     setError(null);
+    setResult(null);
+    setSelectedSavedConfig(null);
 
     try {
       const response = await generateConfig({
