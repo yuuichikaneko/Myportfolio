@@ -148,6 +148,8 @@ function isGamingCpuX3dModel(modelName: string) {
   return /x3d/i.test(modelName);
 }
 
+const RANKING_DISPLAY_LIMIT = 5;
+
 function sortGamingCpuEntries(entries: CpuSelectionEntryResponse[], mode: "cost" | "spec") {
   const sortedEntries = entries
     .slice()
@@ -190,7 +192,7 @@ function sortGamingCpuEntries(entries: CpuSelectionEntryResponse[], mode: "cost"
       return left.model_name.localeCompare(right.model_name, "ja");
     });
 
-  return mode === "cost" ? sortedEntries.slice(0, 10) : sortedEntries;
+  return sortedEntries.slice(0, RANKING_DISPLAY_LIMIT);
 }
 
 export function ResultView({ config, onBack }: ResultProps) {
@@ -520,6 +522,8 @@ export function ResultView({ config, onBack }: ResultProps) {
   };
   const usageLabel = USAGE_LABELS[config.usage] ?? config.usage;
   const isAutoAdjusted = !isSavedConfiguration(config) && Boolean(config.budget_auto_adjusted);
+  const marketBudgetAdjusted = !isSavedConfiguration(config) && Boolean(config.market_budget_adjusted);
+  const marketBudgetNote = !isSavedConfiguration(config) ? (config.market_budget_note ?? "") : "";
   const requestedBudget = !isSavedConfiguration(config)
     ? (config.requested_budget ?? config.budget)
     : config.budget;
@@ -690,8 +694,8 @@ export function ResultView({ config, onBack }: ResultProps) {
           return;
         }
 
-        const start = Math.max(0, currentIndex - 1);
-        const end = Math.min(sorted.length, currentIndex + 2);
+        const start = Math.max(0, currentIndex - 2);
+        const end = Math.min(sorted.length, currentIndex + 3);
         const nearbyModels = sorted.slice(start, end).map((entry) => entry.model_name);
 
         const compare = await compareCpuSelectionMaterial(nearbyModels.length > 0 ? nearbyModels : [currentCpuModelKey]);
@@ -820,7 +824,12 @@ export function ResultView({ config, onBack }: ResultProps) {
 
           {isAutoAdjusted && (
             <div className="mb-6 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-              <p className="font-semibold">相場変動により最低価格を下げました。</p>
+              <p className="font-semibold">
+                {marketBudgetAdjusted ? "相場変動により補正しました。" : "相場変動により最低価格を下げました。"}
+              </p>
+              {marketBudgetAdjusted && marketBudgetNote && (
+                <p className="mt-1 text-xs text-amber-800">{marketBudgetNote}</p>
+              )}
               {!isSavedConfiguration(config) && typeof config.recommended_budget_min_for_x3d === "number" && (
                 <p className="mt-1 text-xs text-amber-800">X3D必須構成の推奨下限: {formatCurrency(config.recommended_budget_min_for_x3d)}</p>
               )}
@@ -933,6 +942,7 @@ export function ResultView({ config, onBack }: ResultProps) {
                     {gpuComparison.results
                       .slice()
                       .sort((left, right) => left.rank_global - right.rank_global)
+                      .slice(0, RANKING_DISPLAY_LIMIT)
                       .map((entry) => {
                         const isCurrent = entry.model_key === currentGpuModelKey;
                         return (
@@ -1031,7 +1041,7 @@ export function ResultView({ config, onBack }: ResultProps) {
                     </tr>
                   </thead>
                   <tbody>
-                    {cpuComparison.results.map((entry, index) => {
+                    {cpuComparison.results.slice(0, RANKING_DISPLAY_LIMIT).map((entry, index) => {
                         const isCurrent = currentCpuModelKey
                           ? entry.model_name.replace(/\s+/g, " ").trim().toUpperCase().includes(currentCpuModelKey)
                           : false;

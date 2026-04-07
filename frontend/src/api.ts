@@ -67,6 +67,8 @@ export interface GenerateConfigResponse {
   budget: number;
   requested_budget?: number;
   budget_auto_adjusted?: boolean;
+  market_budget_adjusted?: boolean;
+  market_budget_note?: string | null;
   recommended_budget_min_for_x3d?: number | null;
   x3d_enforced?: boolean;
   minimum_gaming_gpu_perf_score?: number;
