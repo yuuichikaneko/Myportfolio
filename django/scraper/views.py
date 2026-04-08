@@ -14,6 +14,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from .models import Configuration, CPUSelectionEntry, CPUSelectionSnapshot, GPUPerformanceEntry, GPUPerformanceSnapshot, MarketPriceRangeSnapshot, PCPart, ScraperStatus
 from .serializers import PCPartSerializer, ConfigurationSerializer, ScraperStatusSerializer
+from .dospara_scraper import fetch_dospara_cpu_selection_material
 
 
 _GPU_PERF_CACHE = {
