@@ -172,6 +172,29 @@ describe("ResultView", () => {
     expect(screen.queryByText("Ryzen 9 9950X3D")).not.toBeInTheDocument();
   });
 
+  it("highlights only the exact current cpu model in the cpu ranking table", async () => {
+    const config: GenerateConfigResponse = {
+      usage: "gaming",
+      budget: 180000,
+      configuration_id: 3,
+      total_price: 168000,
+      estimated_power_w: 500,
+      parts: [
+        { category: "cpu", name: "AMD Ryzen 7 7800X BOX", price: 15000, url: "https://example.com/cpu-7800x" },
+        { category: "gpu", name: "RTX 4060", price: 70000, url: "https://example.com/gpu" },
+      ],
+    };
+
+    render(<ResultView config={config} onBack={() => {}} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Ryzen 7 7800X3D")).toBeInTheDocument();
+    });
+
+    expect(screen.getByText("Ryzen 7 7800X3D")).toBeInTheDocument();
+    expect(screen.queryAllByText("現在の構成")).toHaveLength(0);
+  });
+
   it("shows saved configuration id label for saved results", async () => {
     const savedConfig: SavedConfigurationResponse = {
       id: 787,
@@ -241,5 +264,91 @@ describe("ResultView", () => {
 
     expect(screen.getByText("相場変動により補正しました。")).toBeInTheDocument();
     expect(screen.getByText("相場データに基づき、ハイエンド予算を¥520,000へ補正しました。")).toBeInTheDocument();
+  });
+
+  it("shows creator budget tier and build priority labels", async () => {
+    const config: GenerateConfigResponse = {
+      usage: "creator",
+      build_priority: "cost",
+      budget: 684980,
+      budget_tier: "premium",
+      budget_tier_label: "プレミアム",
+      requested_budget: 684980,
+      configuration_id: 1025,
+      total_price: 669627,
+      estimated_power_w: 546,
+      parts: [
+        { category: "cpu", name: "Ryzen 9 9950X", price: 120000, url: "https://example.com/cpu" },
+        { category: "gpu", name: "RTX 5070", price: 100000, url: "https://example.com/gpu" },
+      ],
+    };
+
+    render(<ResultView config={config} onBack={() => {}} />);
+
+    expect(screen.getByText("予算帯: プレミアム")).toBeInTheDocument();
+    expect(screen.getByText("構成方針: コスト重視")).toBeInTheDocument();
+  });
+
+  it("shows a creator cpu recommendation note for game streaming", async () => {
+    const config: GenerateConfigResponse = {
+      usage: "creator",
+      build_priority: "spec",
+      budget: 1314478,
+      requested_budget: 1314478,
+      configuration_id: 1064,
+      total_price: 996079,
+      estimated_power_w: 366,
+      parts: [
+        { category: "cpu", name: "AMD Ryzen 9 9950X", price: 120000, url: "https://example.com/cpu" },
+        { category: "gpu", name: "NVIDIA RTX PRO 4500 Blackwell BOX (RTX PRO 4500 32GB)", price: 259800, url: "https://example.com/gpu" },
+      ],
+    };
+
+    render(<ResultView config={config} onBack={() => {}} />);
+
+    expect(screen.getByText("ゲーム配信をするならRyzen 9 9950X3Dがおすすめです。")).toBeInTheDocument();
+  });
+
+  it("prefers backend budget tier labels over local inference", async () => {
+    const config: GenerateConfigResponse = {
+      usage: "creator",
+      build_priority: "cost",
+      budget: 684980,
+      budget_tier: "premium",
+      budget_tier_label: "プレミアム(backend)",
+      requested_budget: 684980,
+      configuration_id: 1026,
+      total_price: 669627,
+      estimated_power_w: 546,
+      parts: [
+        { category: "cpu", name: "Ryzen 9 9950X", price: 120000, url: "https://example.com/cpu" },
+        { category: "gpu", name: "RTX 5070", price: 100000, url: "https://example.com/gpu" },
+      ],
+    };
+
+    render(<ResultView config={config} onBack={() => {}} />);
+
+    expect(screen.getByText("予算帯: プレミアム(backend)")).toBeInTheDocument();
+    expect(screen.queryByText("予算帯: プレミアム")).not.toBeInTheDocument();
+  });
+
+  it("shows a creator gpu explanation in the gpu section", async () => {
+    const config: GenerateConfigResponse = {
+      usage: "creator",
+      build_priority: "spec",
+      budget: 478478,
+      requested_budget: 478478,
+      configuration_id: 1030,
+      total_price: 464380,
+      estimated_power_w: 366,
+      parts: [
+        { category: "cpu", name: "Intel Core Ultra 7 265F BOX", price: 52380, url: "https://example.com/cpu" },
+        { category: "gpu", name: "ASRock Radeon AI PRO R9700 Creator 32GB", price: 259800, url: "https://example.com/gpu" },
+      ],
+    };
+
+    render(<ResultView config={config} onBack={() => {}} />);
+
+    expect(screen.getByText("クリエイターPCではVRAM容量を優先し、同条件ならNVIDIAを優先します。NVIDIA対応アプリが多く、高解像度編集や重い3D素材向けの選定です。")).toBeInTheDocument();
   });
 });

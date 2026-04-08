@@ -13,7 +13,7 @@ from .dospara_scraper import (
 	fetch_dospara_cpu_selection_material,
 )
 from .tasks import run_scraper_task
-from .views import ConfigurationViewSet, _enforce_gaming_spec_best_value_gpu, _enforce_memory_speed_floor, _get_gpu_perf_score_from_snapshot, _infer_gaming_gpu_tier_label, _infer_memory_speed_mhz, _infer_storage_capacity_gb, _is_gaming_gpu_within_priority_cap, _is_part_suitable, _matches_selection_options, _pick_amd_gaming_cpu, _pick_gaming_cost_gpu_for_auto_adjust, _pick_part_by_target, _prefer_higher_gaming_cost_x3d_cpu, _rebalance_gaming_cost_cpu_to_storage, _recommend_min_budget_for_gaming_x3d_from_low_end_config, build_configuration_response
+from .views import ConfigurationViewSet, _cpu_meets_creator_minimum, _enforce_gaming_spec_best_value_gpu, _enforce_memory_speed_floor, _get_gpu_perf_score_from_snapshot, _infer_gaming_gpu_tier_label, _infer_memory_speed_mhz, _infer_storage_capacity_gb, _is_gaming_gpu_within_priority_cap, _is_part_suitable, _matches_selection_options, _pick_amd_gaming_cpu, _pick_creator_cpu_with_budget, _pick_gaming_cost_gpu_for_auto_adjust, _pick_part_by_target, _prefer_creator_premium_cpu, _prefer_creator_premium_gpu, _prefer_higher_gaming_cost_x3d_cpu, _rebalance_gaming_cost_cpu_to_storage, _recommend_min_budget_for_gaming_x3d_from_low_end_config, build_configuration_response
 
 
 class ScraperApiTests(APITestCase):
@@ -1965,6 +1965,1189 @@ class ScraperApiTests(APITestCase):
 		self.assertIn('ryzen', amd_cpu['name'].lower())
 		self.assertEqual(intel_response.data['cpu_vendor'], 'intel')
 		self.assertEqual(amd_response.data['cpu_vendor'], 'amd')
+
+	def test_build_configuration_creator_cost_does_not_force_over_budget_gpu(self):
+		PCPart.objects.all().delete()
+
+		PCPart.objects.create(
+			part_type='cpu',
+			name='AMD Ryzen 5 3400G BOX Creator Budget',
+			price=10500,
+			specs={},
+			url='https://example.com/cpu-3400g-creator-budget',
+		)
+		PCPart.objects.create(
+			part_type='cpu',
+			name='AMD Ryzen 7 5700X BOX Creator Budget',
+			price=27800,
+			specs={},
+			url='https://example.com/cpu-5700x-creator-budget',
+		)
+		PCPart.objects.create(
+			part_type='gpu',
+			name='GeForce RTX 4060 8GB Creator Budget',
+			price=49800,
+			specs={'vram': '8GB'},
+			url='https://example.com/gpu-4060-creator-budget',
+		)
+		PCPart.objects.create(
+			part_type='motherboard',
+			name='B650 Creator Budget',
+			price=16000,
+			specs={'socket': 'AM5', 'memory_type': 'DDR5', 'form_factor': 'ATX'},
+			url='https://example.com/mb-b650-creator-budget',
+		)
+		PCPart.objects.create(
+			part_type='memory',
+			name='DDR5 32GB Creator Budget',
+			price=15000,
+			specs={'memory_type': 'DDR5', 'capacity_gb': 32, 'speed_mhz': 5600},
+			url='https://example.com/memory-creator-budget',
+		)
+		PCPart.objects.create(
+			part_type='storage',
+			name='NVMe 1TB Creator Budget',
+			price=12000,
+			specs={'interface': 'NVMe', 'capacity_gb': 1000},
+			url='https://example.com/storage-creator-budget',
+		)
+		PCPart.objects.create(
+			part_type='cpu_cooler',
+			name='Air Cooler Creator Budget',
+			price=4500,
+			specs={'supported_sockets': ['AM5']},
+			url='https://example.com/cooler-creator-budget',
+		)
+		PCPart.objects.create(
+			part_type='os',
+			name='Windows 11 Home Creator Budget',
+			price=17000,
+			specs={},
+			url='https://example.com/os-creator-budget',
+		)
+		PCPart.objects.create(
+			part_type='psu',
+			name='750W PSU Creator Budget',
+			price=8000,
+			specs={'wattage': 750},
+			url='https://example.com/psu-creator-budget',
+		)
+		PCPart.objects.create(
+			part_type='case',
+			name='ATX Case Creator Budget',
+			price=6000,
+			specs={'supported_form_factors': ['ATX']},
+			url='https://example.com/case-creator-budget',
+		)
+
+		budget = 184980
+		response_data, error_response = build_configuration_response(
+			budget,
+			'creator',
+			build_priority='cost',
+			persist=False,
+		)
+
+		self.assertIsNone(error_response)
+		self.assertLessEqual(int(response_data.get('total_price') or 0), budget)
+		parts = {p['category']: p for p in response_data.get('parts', [])}
+		self.assertIn('gpu', parts)
+		self.assertEqual(parts['cpu']['name'], 'AMD Ryzen 7 5700X BOX Creator Budget')
+		self.assertTrue(_cpu_meets_creator_minimum(PCPart.objects.get(name='AMD Ryzen 7 5700X BOX Creator Budget'), min_cores=8, min_threads=16))
+
+	def test_build_configuration_creator_spec_ranks_up_from_5700x(self):
+		PCPart.objects.all().delete()
+
+		PCPart.objects.create(
+			part_type='cpu',
+			name='AMD Ryzen 7 5700X BOX Creator Spec',
+			price=27800,
+			specs={'socket': 'AM4'},
+			url='https://example.com/cpu-5700x-creator-spec',
+		)
+		PCPart.objects.create(
+			part_type='cpu',
+			name='AMD Ryzen 7 9700X BOX Creator Spec',
+			price=49800,
+			specs={'socket': 'AM5'},
+			url='https://example.com/cpu-9700x-creator-spec',
+		)
+		PCPart.objects.create(
+			part_type='gpu',
+			name='GeForce RTX 4060 8GB Creator Spec',
+			price=49800,
+			specs={'vram': '8GB'},
+			url='https://example.com/gpu-4060-creator-spec',
+		)
+		PCPart.objects.create(
+			part_type='motherboard',
+			name='B650 Creator Spec',
+			price=16000,
+			specs={'socket': 'AM5', 'memory_type': 'DDR5', 'form_factor': 'ATX'},
+			url='https://example.com/mb-b650-creator-spec',
+		)
+		PCPart.objects.create(
+			part_type='memory',
+			name='DDR5 32GB Creator Spec',
+			price=15000,
+			specs={'memory_type': 'DDR5', 'capacity_gb': 32, 'speed_mhz': 5600},
+			url='https://example.com/memory-creator-spec',
+		)
+		PCPart.objects.create(
+			part_type='storage',
+			name='NVMe 1TB Creator Spec',
+			price=12000,
+			specs={'interface': 'NVMe', 'capacity_gb': 1000},
+			url='https://example.com/storage-creator-spec',
+		)
+		PCPart.objects.create(
+			part_type='cpu_cooler',
+			name='Air Cooler Creator Spec',
+			price=4500,
+			specs={'supported_sockets': ['AM4', 'AM5']},
+			url='https://example.com/cooler-creator-spec',
+		)
+		PCPart.objects.create(
+			part_type='os',
+			name='Windows 11 Home Creator Spec',
+			price=17000,
+			specs={},
+			url='https://example.com/os-creator-spec',
+		)
+		PCPart.objects.create(
+			part_type='psu',
+			name='750W PSU Creator Spec',
+			price=8000,
+			specs={'wattage': 750},
+			url='https://example.com/psu-creator-spec',
+		)
+		PCPart.objects.create(
+			part_type='case',
+			name='ATX Case Creator Spec',
+			price=6000,
+			specs={'supported_form_factors': ['ATX']},
+			url='https://example.com/case-creator-spec',
+		)
+
+		response_data, error_response = build_configuration_response(
+			184980,
+			'creator',
+			build_priority='spec',
+			persist=False,
+		)
+
+		self.assertIsNone(error_response)
+		parts = {p['category']: p for p in response_data.get('parts', [])}
+		self.assertEqual(parts['cpu']['name'], 'AMD Ryzen 7 9700X BOX Creator Spec')
+		self.assertGreaterEqual(response_data['total_price'], 0)
+
+	def test_build_configuration_creator_spec_excludes_intel_14th_core_i_cpu(self):
+		PCPart.objects.all().delete()
+
+		PCPart.objects.create(
+			part_type='cpu',
+			name='Intel Core i9 14900KF BOX Creator Spec Excluded',
+			price=59800,
+			specs={'socket': 'LGA1700'},
+			url='https://www.example.org/cpu-14900kf-creator-spec-excluded',
+		)
+		PCPart.objects.create(
+			part_type='cpu',
+			name='AMD Ryzen 9 9900X BOX Creator Spec Preferred',
+			price=60980,
+			specs={'socket': 'AM5'},
+			url='https://www.example.org/cpu-9900x-creator-spec-preferred',
+		)
+		PCPart.objects.create(
+			part_type='gpu',
+			name='ASRock Radeon AI PRO R9700 Creator 32GB',
+			price=259800,
+			specs={'vram': '32GB'},
+			url='https://www.example.org/gpu-r9700-creator-spec-excluded',
+		)
+		PCPart.objects.create(
+			part_type='motherboard',
+			name='X870 Creator Spec Preferred',
+			price=35970,
+			specs={'socket': 'AM5', 'memory_type': 'DDR5', 'form_factor': 'ATX'},
+			url='https://www.example.org/mb-creator-spec-preferred',
+		)
+		PCPart.objects.create(
+			part_type='memory',
+			name='DDR5 64GB Creator Spec Preferred',
+			price=39800,
+			specs={'memory_type': 'DDR5', 'capacity_gb': 64, 'speed_mhz': 6400},
+			url='https://www.example.org/memory-creator-spec-preferred',
+		)
+		PCPart.objects.create(
+			part_type='storage',
+			name='NVMe 2TB Creator Spec Preferred',
+			price=22000,
+			specs={'interface': 'NVMe', 'capacity_gb': 2000},
+			url='https://www.example.org/storage-creator-spec-preferred',
+		)
+		PCPart.objects.create(
+			part_type='cpu_cooler',
+			name='AIO Cooler Creator Spec Preferred',
+			price=19990,
+			specs={'supported_sockets': ['AM5']},
+			url='https://www.example.org/cooler-creator-spec-preferred',
+		)
+		PCPart.objects.create(
+			part_type='os',
+			name='Windows 11 Pro Creator Spec Preferred',
+			price=23980,
+			specs={},
+			url='https://www.example.org/os-creator-spec-preferred',
+		)
+		PCPart.objects.create(
+			part_type='psu',
+			name='1000W PSU Creator Spec Preferred',
+			price=16580,
+			specs={'wattage': 1000},
+			url='https://www.example.org/psu-creator-spec-preferred',
+		)
+		PCPart.objects.create(
+			part_type='case',
+			name='ATX Case Creator Spec Preferred',
+			price=6000,
+			specs={'supported_form_factors': ['ATX']},
+			url='https://www.example.org/case-creator-spec-preferred',
+		)
+
+		response_data, error_response = build_configuration_response(
+			478478,
+			'creator',
+			cooler_type='air',
+			radiator_size='240',
+			cooling_profile='performance',
+			case_size='mid',
+			case_fan_policy='auto',
+			cpu_vendor='any',
+			build_priority='spec',
+			persist=False,
+		)
+
+		self.assertIsNone(error_response)
+		parts = {p['category']: p for p in response_data.get('parts', [])}
+		self.assertEqual(parts['cpu']['name'], 'AMD Ryzen 9 9900X BOX Creator Spec Preferred')
+
+	def test_build_configuration_creator_cost_ranks_up_in_mid_budget_when_available(self):
+		PCPart.objects.all().delete()
+
+		PCPart.objects.create(
+			part_type='cpu',
+			name='AMD Ryzen 7 5700X BOX Creator Cost',
+			price=27800,
+			specs={'socket': 'AM4'},
+			url='https://example.com/cpu-5700x-creator-cost',
+		)
+		PCPart.objects.create(
+			part_type='cpu',
+			name='AMD Ryzen 7 9700X BOX Creator Cost',
+			price=49800,
+			specs={'socket': 'AM5'},
+			url='https://example.com/cpu-9700x-creator-cost',
+		)
+		PCPart.objects.create(
+			part_type='gpu',
+			name='GeForce RTX 4060 8GB Creator Cost',
+			price=49800,
+			specs={'vram': '8GB'},
+			url='https://example.com/gpu-4060-creator-cost',
+		)
+		PCPart.objects.create(
+			part_type='motherboard',
+			name='B650 Creator Cost',
+			price=16000,
+			specs={'socket': 'AM5', 'memory_type': 'DDR5', 'form_factor': 'ATX'},
+			url='https://example.com/mb-b650-creator-cost',
+		)
+		PCPart.objects.create(
+			part_type='memory',
+			name='DDR5 32GB Creator Cost',
+			price=15000,
+			specs={'memory_type': 'DDR5', 'capacity_gb': 32, 'speed_mhz': 5600},
+			url='https://example.com/memory-creator-cost',
+		)
+		PCPart.objects.create(
+			part_type='storage',
+			name='NVMe 1TB Creator Cost',
+			price=12000,
+			specs={'interface': 'NVMe', 'capacity_gb': 1000},
+			url='https://example.com/storage-creator-cost',
+		)
+		PCPart.objects.create(
+			part_type='cpu_cooler',
+			name='Air Cooler Creator Cost',
+			price=4500,
+			specs={'supported_sockets': ['AM4', 'AM5']},
+			url='https://example.com/cooler-creator-cost',
+		)
+		PCPart.objects.create(
+			part_type='os',
+			name='Windows 11 Home Creator Cost',
+			price=17000,
+			specs={},
+			url='https://example.com/os-creator-cost',
+		)
+		PCPart.objects.create(
+			part_type='psu',
+			name='750W PSU Creator Cost',
+			price=8000,
+			specs={'wattage': 750},
+			url='https://example.com/psu-creator-cost',
+		)
+		PCPart.objects.create(
+			part_type='case',
+			name='ATX Case Creator Cost',
+			price=6000,
+			specs={'supported_form_factors': ['ATX']},
+			url='https://example.com/case-creator-cost',
+		)
+
+		response_data, error_response = build_configuration_response(
+			284980,
+			'creator',
+			build_priority='cost',
+			persist=False,
+		)
+
+		self.assertIsNone(error_response)
+		parts = {p['category']: p for p in response_data.get('parts', [])}
+		self.assertEqual(parts['cpu']['name'], 'AMD Ryzen 7 9700X BOX Creator Cost')
+		self.assertGreater(response_data['total_price'], 152100)
+
+	def test_build_configuration_creator_prefers_higher_vram_amd_gpu_over_lower_vram_nvidia(self):
+		PCPart.objects.all().delete()
+
+		PCPart.objects.create(
+			part_type='cpu',
+			name='AMD Ryzen 7 5700X BOX Creator GPU',
+			price=27800,
+			specs={'socket': 'AM4'},
+			url='https://example.com/cpu-5700x-creator-gpu',
+		)
+		PCPart.objects.create(
+			part_type='gpu',
+			name='NVIDIA GeForce RTX 4060 8GB Creator GPU',
+			price=49800,
+			specs={'vram': '8GB'},
+			url='https://example.com/gpu-4060-creator-gpu',
+		)
+		PCPart.objects.create(
+			part_type='gpu',
+			name='AMD Radeon RX 6700 XT 12GB Creator GPU',
+			price=52980,
+			specs={'vram': '12GB'},
+			url='https://example.com/gpu-6700xt-creator-gpu',
+		)
+		PCPart.objects.create(
+			part_type='motherboard',
+			name='B550 Creator GPU',
+			price=12000,
+			specs={'socket': 'AM4', 'memory_type': 'DDR4', 'form_factor': 'ATX'},
+			url='https://example.com/mb-b550-creator-gpu',
+		)
+		PCPart.objects.create(
+			part_type='memory',
+			name='DDR4 32GB Creator GPU',
+			price=15000,
+			specs={'memory_type': 'DDR4', 'capacity_gb': 32, 'speed_mhz': 3200},
+			url='https://example.com/memory-creator-gpu',
+		)
+		PCPart.objects.create(
+			part_type='storage',
+			name='NVMe 1TB Creator GPU',
+			price=12000,
+			specs={'interface': 'NVMe', 'capacity_gb': 1000},
+			url='https://example.com/storage-creator-gpu',
+		)
+		PCPart.objects.create(
+			part_type='cpu_cooler',
+			name='Air Cooler Creator GPU',
+			price=4500,
+			specs={'supported_sockets': ['AM4']},
+			url='https://example.com/cooler-creator-gpu',
+		)
+		PCPart.objects.create(
+			part_type='os',
+			name='Windows 11 Home Creator GPU',
+			price=17000,
+			specs={},
+			url='https://example.com/os-creator-gpu',
+		)
+		PCPart.objects.create(
+			part_type='psu',
+			name='750W PSU Creator GPU',
+			price=8000,
+			specs={'wattage': 750},
+			url='https://example.com/psu-creator-gpu',
+		)
+		PCPart.objects.create(
+			part_type='case',
+			name='ATX Case Creator GPU',
+			price=6000,
+			specs={'supported_form_factors': ['ATX']},
+			url='https://example.com/case-creator-gpu',
+		)
+
+		response_data, error_response = build_configuration_response(
+			184980,
+			'creator',
+			build_priority='cost',
+			persist=False,
+		)
+
+		self.assertIsNone(error_response)
+		parts = {p['category']: p for p in response_data.get('parts', [])}
+		self.assertEqual(parts['gpu']['name'], 'AMD Radeon RX 6700 XT 12GB Creator GPU')
+
+	def test_build_configuration_creator_prefers_nvidia_when_vram_and_score_match(self):
+		PCPart.objects.all().delete()
+
+		PCPart.objects.create(
+			part_type='cpu',
+			name='AMD Ryzen 7 5700X BOX Creator GPU Tie',
+			price=27800,
+			specs={'socket': 'AM4'},
+			url='https://example.com/cpu-5700x-creator-gpu-tie',
+		)
+		PCPart.objects.create(
+			part_type='gpu',
+			name='AMD Creator GPU 8GB Tie',
+			price=49800,
+			specs={'vram': '8GB'},
+			url='https://example.com/gpu-amd-creator-gpu-tie',
+		)
+		PCPart.objects.create(
+			part_type='gpu',
+			name='NVIDIA Creator GPU 8GB Tie',
+			price=52980,
+			specs={'vram': '8GB'},
+			url='https://example.com/gpu-nvidia-creator-gpu-tie',
+		)
+		PCPart.objects.create(
+			part_type='motherboard',
+			name='B550 Creator GPU Tie',
+			price=12000,
+			specs={'socket': 'AM4', 'memory_type': 'DDR4', 'form_factor': 'ATX'},
+			url='https://example.com/mb-b550-creator-gpu-tie',
+		)
+		PCPart.objects.create(
+			part_type='memory',
+			name='DDR4 32GB Creator GPU Tie',
+			price=15000,
+			specs={'memory_type': 'DDR4', 'capacity_gb': 32, 'speed_mhz': 3200},
+			url='https://example.com/memory-creator-gpu-tie',
+		)
+		PCPart.objects.create(
+			part_type='storage',
+			name='NVMe 1TB Creator GPU Tie',
+			price=12000,
+			specs={'interface': 'NVMe', 'capacity_gb': 1000},
+			url='https://example.com/storage-creator-gpu-tie',
+		)
+		PCPart.objects.create(
+			part_type='cpu_cooler',
+			name='Air Cooler Creator GPU Tie',
+			price=4500,
+			specs={'supported_sockets': ['AM4']},
+			url='https://example.com/cooler-creator-gpu-tie',
+		)
+		PCPart.objects.create(
+			part_type='os',
+			name='Windows 11 Home Creator GPU Tie',
+			price=17000,
+			specs={},
+			url='https://example.com/os-creator-gpu-tie',
+		)
+		PCPart.objects.create(
+			part_type='psu',
+			name='750W PSU Creator GPU Tie',
+			price=8000,
+			specs={'wattage': 750},
+			url='https://example.com/psu-creator-gpu-tie',
+		)
+		PCPart.objects.create(
+			part_type='case',
+			name='ATX Case Creator GPU Tie',
+			price=6000,
+			specs={'supported_form_factors': ['ATX']},
+			url='https://example.com/case-creator-gpu-tie',
+		)
+
+		response_data, error_response = build_configuration_response(
+			184980,
+			'creator',
+			build_priority='cost',
+			persist=False,
+		)
+
+		self.assertIsNone(error_response)
+		parts = {p['category']: p for p in response_data.get('parts', [])}
+		self.assertEqual(parts['gpu']['name'], 'NVIDIA Creator GPU 8GB Tie')
+
+	def test_build_configuration_creator_premium_cost_forces_r9700(self):
+		PCPart.objects.all().delete()
+
+		PCPart.objects.create(
+			part_type='cpu',
+			name='AMD Ryzen 7 7800X3D BOX Creator Premium Cost',
+			price=49800,
+			specs={'socket': 'AM5'},
+			url='https://example.com/cpu-creator-premium-cost',
+		)
+		PCPart.objects.create(
+			part_type='gpu',
+			name='ASRock Radeon AI PRO R9700 Creator 32GB',
+			price=259800,
+			specs={'vram': '32GB'},
+			url='https://example.com/gpu-r9700-creator-premium-cost',
+		)
+		PCPart.objects.create(
+			part_type='gpu',
+			name='GeForce RTX 5090 32GB',
+			price=529800,
+			specs={'vram': '32GB'},
+			url='https://example.com/gpu-5090-creator-premium-cost',
+		)
+		PCPart.objects.create(
+			part_type='motherboard',
+			name='X870 Creator Premium Cost',
+			price=35970,
+			specs={'socket': 'AM5', 'memory_type': 'DDR5', 'form_factor': 'ATX'},
+			url='https://example.com/mb-creator-premium-cost',
+		)
+		PCPart.objects.create(
+			part_type='memory',
+			name='DDR5 64GB Creator Premium Cost',
+			price=39800,
+			specs={'memory_type': 'DDR5', 'capacity_gb': 64, 'speed_mhz': 5600},
+			url='https://example.com/memory-creator-premium-cost',
+		)
+		PCPart.objects.create(
+			part_type='storage',
+			name='NVMe 2TB Creator Premium Cost',
+			price=22000,
+			specs={'interface': 'NVMe', 'capacity_gb': 2000},
+			url='https://example.com/storage-creator-premium-cost',
+		)
+		PCPart.objects.create(
+			part_type='cpu_cooler',
+			name='Air Cooler Creator Premium Cost',
+			price=8000,
+			specs={'supported_sockets': ['AM5']},
+			url='https://example.com/cooler-creator-premium-cost',
+		)
+		PCPart.objects.create(
+			part_type='os',
+			name='Windows 11 Home Creator Premium Cost',
+			price=17000,
+			specs={},
+			url='https://example.com/os-creator-premium-cost',
+		)
+		PCPart.objects.create(
+			part_type='psu',
+			name='1000W PSU Creator Premium Cost',
+			price=16580,
+			specs={'wattage': 1000},
+			url='https://example.com/psu-creator-premium-cost',
+		)
+		PCPart.objects.create(
+			part_type='case',
+			name='ATX Case Creator Premium Cost',
+			price=6000,
+			specs={'supported_form_factors': ['ATX']},
+			url='https://example.com/case-creator-premium-cost',
+		)
+
+		response_data, error_response = build_configuration_response(
+			1294980,
+			'creator',
+			build_priority='cost',
+			persist=False,
+		)
+
+		self.assertIsNone(error_response)
+		parts = {p['category']: p for p in response_data.get('parts', [])}
+		self.assertEqual(parts['gpu']['name'], 'ASRock Radeon AI PRO R9700 Creator 32GB')
+		self.assertEqual(response_data['budget_tier'], 'premium')
+		self.assertEqual(response_data['budget_tier_label'], 'プレミアム')
+
+	def test_build_configuration_creator_premium_cost_684980_forces_r9700(self):
+		PCPart.objects.all().delete()
+
+		PCPart.objects.create(
+			part_type='cpu',
+			name='AMD Ryzen 7 7800X3D BOX Creator Premium Cost Mid',
+			price=49800,
+			specs={'socket': 'AM5'},
+			url='https://example.com/cpu-creator-premium-cost-mid',
+		)
+		PCPart.objects.create(
+			part_type='gpu',
+			name='ASRock Radeon AI PRO R9700 Creator 32GB',
+			price=259800,
+			specs={'vram': '32GB'},
+			url='https://example.com/gpu-r9700-creator-premium-cost-mid',
+		)
+		PCPart.objects.create(
+			part_type='gpu',
+			name='GeForce RTX 5080 16GB',
+			price=179800,
+			specs={'vram': '16GB'},
+			url='https://example.com/gpu-5080-creator-premium-cost-mid',
+		)
+		PCPart.objects.create(
+			part_type='motherboard',
+			name='X870 Creator Premium Cost Mid',
+			price=35970,
+			specs={'socket': 'AM5', 'memory_type': 'DDR5', 'form_factor': 'ATX'},
+			url='https://example.com/mb-creator-premium-cost-mid',
+		)
+		PCPart.objects.create(
+			part_type='memory',
+			name='DDR5 64GB Creator Premium Cost Mid',
+			price=39800,
+			specs={'memory_type': 'DDR5', 'capacity_gb': 64, 'speed_mhz': 5600},
+			url='https://example.com/memory-creator-premium-cost-mid',
+		)
+		PCPart.objects.create(
+			part_type='storage',
+			name='NVMe 2TB Creator Premium Cost Mid',
+			price=22000,
+			specs={'interface': 'NVMe', 'capacity_gb': 2000},
+			url='https://example.com/storage-creator-premium-cost-mid',
+		)
+		PCPart.objects.create(
+			part_type='cpu_cooler',
+			name='Air Cooler Creator Premium Cost Mid',
+			price=8000,
+			specs={'supported_sockets': ['AM5']},
+			url='https://example.com/cooler-creator-premium-cost-mid',
+		)
+		PCPart.objects.create(
+			part_type='os',
+			name='Windows 11 Home Creator Premium Cost Mid',
+			price=17000,
+			specs={},
+			url='https://example.com/os-creator-premium-cost-mid',
+		)
+		PCPart.objects.create(
+			part_type='psu',
+			name='1000W PSU Creator Premium Cost Mid',
+			price=16580,
+			specs={'wattage': 1000},
+			url='https://example.com/psu-creator-premium-cost-mid',
+		)
+		PCPart.objects.create(
+			part_type='case',
+			name='ATX Case Creator Premium Cost Mid',
+			price=6000,
+			specs={'supported_form_factors': ['ATX']},
+			url='https://example.com/case-creator-premium-cost-mid',
+		)
+
+		response_data, error_response = build_configuration_response(
+			684980,
+			'creator',
+			build_priority='cost',
+			persist=False,
+		)
+
+		self.assertIsNone(error_response)
+		parts = {p['category']: p for p in response_data.get('parts', [])}
+		self.assertEqual(parts['gpu']['name'], 'ASRock Radeon AI PRO R9700 Creator 32GB')
+
+	def test_build_configuration_creator_premium_spec_forces_rtx_5090(self):
+		PCPart.objects.all().delete()
+
+		PCPart.objects.create(
+			part_type='cpu',
+			name='Intel Core Ultra 9 285K BOX Creator Premium Spec',
+			price=96999,
+			specs={'socket': 'LGA1851'},
+			url='https://example.com/cpu-creator-premium-spec',
+		)
+		PCPart.objects.create(
+			part_type='gpu',
+			name='ASRock Radeon AI PRO R9700 Creator 32GB',
+			price=259800,
+			specs={'vram': '32GB'},
+			url='https://example.com/gpu-r9700-creator-premium-spec',
+		)
+		PCPart.objects.create(
+			part_type='gpu',
+			name='GeForce RTX 5090 32GB',
+			price=529800,
+			specs={'vram': '32GB'},
+			url='https://www.example.org/gpu-5090-creator-premium-spec',
+		)
+		PCPart.objects.create(
+			part_type='motherboard',
+			name='B860 Creator Premium Spec',
+			price=25980,
+			specs={'socket': 'LGA1851', 'memory_type': 'DDR5', 'form_factor': 'ATX'},
+			url='https://example.com/mb-creator-premium-spec',
+		)
+		PCPart.objects.create(
+			part_type='memory',
+			name='DDR5 64GB Creator Premium Spec',
+			price=39800,
+			specs={'memory_type': 'DDR5', 'capacity_gb': 64, 'speed_mhz': 6400},
+			url='https://example.com/memory-creator-premium-spec',
+		)
+		PCPart.objects.create(
+			part_type='storage',
+			name='NVMe 2TB Creator Premium Spec',
+			price=22000,
+			specs={'interface': 'NVMe', 'capacity_gb': 2000},
+			url='https://example.com/storage-creator-premium-spec',
+		)
+		PCPart.objects.create(
+			part_type='cpu_cooler',
+			name='AIO Cooler Creator Premium Spec',
+			price=19990,
+			specs={'supported_sockets': ['LGA1851']},
+			url='https://example.com/cooler-creator-premium-spec',
+		)
+		PCPart.objects.create(
+			part_type='os',
+			name='Windows 11 Pro Creator Premium Spec',
+			price=23980,
+			specs={},
+			url='https://example.com/os-creator-premium-spec',
+		)
+		PCPart.objects.create(
+			part_type='psu',
+			name='1000W PSU Creator Premium Spec',
+			price=16580,
+			specs={'wattage': 1000},
+			url='https://example.com/psu-creator-premium-spec',
+		)
+		PCPart.objects.create(
+			part_type='case',
+			name='ATX Case Creator Premium Spec',
+			price=6000,
+			specs={'supported_form_factors': ['ATX']},
+			url='https://example.com/case-creator-premium-spec',
+		)
+
+		response_data, error_response = build_configuration_response(
+			1294980,
+			'creator',
+			build_priority='spec',
+			persist=False,
+		)
+
+		self.assertIsNone(error_response)
+		parts = {p['category']: p for p in response_data.get('parts', [])}
+		self.assertEqual(parts['gpu']['name'], 'GeForce RTX 5090 32GB')
+
+	def test_build_configuration_creator_premium_spec_prefers_rtx_pro_4500_when_available(self):
+		PCPart.objects.all().delete()
+
+		PCPart.objects.create(
+			part_type='cpu',
+			name='Intel Core Ultra 9 285K BOX Creator Premium Spec Pro',
+			price=96999,
+			specs={'socket': 'LGA1851'},
+			url='https://www.example.org/cpu-creator-premium-spec-pro',
+		)
+		PCPart.objects.create(
+			part_type='gpu',
+			name='NVIDIA RTX PRO 4500 Blackwell BOX (RTX PRO 4500 32GB)',
+			price=506000,
+			specs={'vram': '32GB'},
+			url='https://www.dospara.co.jp/SBR1808/IC525801.html',
+		)
+		PCPart.objects.create(
+			part_type='gpu',
+			name='ASRock Radeon AI PRO R9700 Creator 32GB',
+			price=259800,
+			specs={'vram': '32GB'},
+			url='https://www.example.org/gpu-r9700-creator-premium-spec-pro',
+		)
+		PCPart.objects.create(
+			part_type='motherboard',
+			name='B860 Creator Premium Spec Pro',
+			price=25980,
+			specs={'socket': 'LGA1851', 'memory_type': 'DDR5', 'form_factor': 'ATX'},
+			url='https://www.example.org/mb-creator-premium-spec-pro',
+		)
+		PCPart.objects.create(
+			part_type='memory',
+			name='DDR5 64GB Creator Premium Spec Pro',
+			price=39800,
+			specs={'memory_type': 'DDR5', 'capacity_gb': 64, 'speed_mhz': 6400},
+			url='https://www.example.org/memory-creator-premium-spec-pro',
+		)
+		PCPart.objects.create(
+			part_type='storage',
+			name='NVMe 2TB Creator Premium Spec Pro',
+			price=22000,
+			specs={'interface': 'NVMe', 'capacity_gb': 2000},
+			url='https://www.example.org/storage-creator-premium-spec-pro',
+		)
+		PCPart.objects.create(
+			part_type='cpu_cooler',
+			name='AIO Cooler Creator Premium Spec Pro',
+			price=19990,
+			specs={'supported_sockets': ['LGA1851']},
+			url='https://www.example.org/cooler-creator-premium-spec-pro',
+		)
+		PCPart.objects.create(
+			part_type='os',
+			name='Windows 11 Pro Creator Premium Spec Pro',
+			price=23980,
+			specs={},
+			url='https://www.example.org/os-creator-premium-spec-pro',
+		)
+		PCPart.objects.create(
+			part_type='psu',
+			name='1000W PSU Creator Premium Spec Pro',
+			price=16580,
+			specs={'wattage': 1000},
+			url='https://www.example.org/psu-creator-premium-spec-pro',
+		)
+		PCPart.objects.create(
+			part_type='case',
+			name='ATX Case Creator Premium Spec Pro',
+			price=6000,
+			specs={'supported_form_factors': ['ATX']},
+			url='https://www.example.org/case-creator-premium-spec-pro',
+		)
+
+		response_data, error_response = build_configuration_response(
+			1314478,
+			'creator',
+			build_priority='spec',
+			persist=False,
+		)
+
+		self.assertIsNone(error_response)
+		parts = {p['category']: p for p in response_data.get('parts', [])}
+		self.assertEqual(parts['gpu']['name'], 'NVIDIA RTX PRO 4500 Blackwell BOX (RTX PRO 4500 32GB)')
+
+	def test_prefer_creator_premium_gpu_prioritizes_rtx_pro_4500_over_rtx_5090(self):
+		gpu_4500 = PCPart(
+			part_type='gpu',
+			name='NVIDIA RTX PRO 4500 Blackwell BOX (RTX PRO 4500 32GB)',
+			price=506000,
+			specs={'vram': '32GB'},
+			url='https://www.dospara.co.jp/SBR1808/IC525801.html',
+		)
+		gpu_5090 = PCPart(
+			part_type='gpu',
+			name='GeForce RTX 5090 32GB',
+			price=529800,
+			specs={'vram': '32GB'},
+			url='https://www.example.org/gpu-5090-creator-premium-spec-pro',
+		)
+
+		picked = _prefer_creator_premium_gpu([gpu_5090, gpu_4500], build_priority='spec')
+		self.assertIsNotNone(picked)
+		self.assertEqual(picked[0].name, 'NVIDIA RTX PRO 4500 Blackwell BOX (RTX PRO 4500 32GB)')
+
+	def test_pick_creator_cpu_with_budget_high_end_cost_prefers_ryzen_9900x_over_265f(self):
+		cpu_265f = PCPart(
+			part_type='cpu',
+			name='Intel Core Ultra 7 265F BOX',
+			price=52380,
+			specs={'socket': 'LGA1851'},
+			url='https://www.example.org/cpu-265f',
+		)
+		cpu_9900x = PCPart(
+			part_type='cpu',
+			name='AMD Ryzen 9 9900X BOX',
+			price=59800,
+			specs={'socket': 'AM5'},
+			url='https://www.example.org/cpu-9900x',
+		)
+
+		picked = _pick_creator_cpu_with_budget([cpu_265f, cpu_9900x], budget=434980, build_priority='cost')
+		self.assertIsNotNone(picked)
+		self.assertEqual(picked.name, 'AMD Ryzen 9 9900X BOX')
+
+	def test_build_configuration_creator_premium_spec_prefers_r9700_when_rtx5090_unavailable(self):
+		PCPart.objects.all().delete()
+
+		PCPart.objects.create(
+			part_type='cpu',
+			name='Intel Core Ultra 9 285K BOX Creator Premium Spec Fallback',
+			price=96999,
+			specs={'socket': 'LGA1851'},
+			url='https://example.com/cpu-creator-premium-spec-fallback',
+		)
+		PCPart.objects.create(
+			part_type='gpu',
+			name='ASRock Radeon AI PRO R9700 Creator 32GB',
+			price=259800,
+			specs={'vram': '32GB'},
+			url='https://www.example.org/gpu-r9700-creator-premium-spec-fallback',
+		)
+		PCPart.objects.create(
+			part_type='gpu',
+			name='GeForce RTX 5080 16GB',
+			price=199800,
+			specs={'vram': '16GB'},
+			url='https://www.example.org/gpu-5080-creator-premium-spec-fallback',
+		)
+		PCPart.objects.create(
+			part_type='motherboard',
+			name='B860 Creator Premium Spec Fallback',
+			price=25980,
+			specs={'socket': 'LGA1851', 'memory_type': 'DDR5', 'form_factor': 'ATX'},
+			url='https://www.example.org/mb-creator-premium-spec-fallback',
+		)
+		PCPart.objects.create(
+			part_type='memory',
+			name='DDR5 64GB Creator Premium Spec Fallback',
+			price=39800,
+			specs={'memory_type': 'DDR5', 'capacity_gb': 64, 'speed_mhz': 6400},
+			url='https://www.example.org/memory-creator-premium-spec-fallback',
+		)
+		PCPart.objects.create(
+			part_type='storage',
+			name='NVMe 2TB Creator Premium Spec Fallback',
+			price=22000,
+			specs={'interface': 'NVMe', 'capacity_gb': 2000},
+			url='https://www.example.org/storage-creator-premium-spec-fallback',
+		)
+		PCPart.objects.create(
+			part_type='cpu_cooler',
+			name='AIO Cooler Creator Premium Spec Fallback',
+			price=19990,
+			specs={'supported_sockets': ['LGA1851']},
+			url='https://www.example.org/cooler-creator-premium-spec-fallback',
+		)
+		PCPart.objects.create(
+			part_type='os',
+			name='Windows 11 Pro Creator Premium Spec Fallback',
+			price=23980,
+			specs={},
+			url='https://www.example.org/os-creator-premium-spec-fallback',
+		)
+		PCPart.objects.create(
+			part_type='psu',
+			name='1000W PSU Creator Premium Spec Fallback',
+			price=16580,
+			specs={'wattage': 1000},
+			url='https://www.example.org/psu-creator-premium-spec-fallback',
+		)
+		PCPart.objects.create(
+			part_type='case',
+			name='ATX Case Creator Premium Spec Fallback',
+			price=6000,
+			specs={'supported_form_factors': ['ATX']},
+			url='https://www.example.org/case-creator-premium-spec-fallback',
+		)
+
+		response_data, error_response = build_configuration_response(
+			1314478,
+			'creator',
+			build_priority='spec',
+			persist=False,
+		)
+
+		self.assertIsNone(error_response)
+		parts = {p['category']: p for p in response_data.get('parts', [])}
+		self.assertEqual(parts['gpu']['name'], 'ASRock Radeon AI PRO R9700 Creator 32GB')
+
+	def test_build_configuration_creator_premium_cost_prefers_9950x3d_cpu(self):
+		PCPart.objects.all().delete()
+
+		PCPart.objects.create(
+			part_type='cpu',
+			name='AMD Ryzen 7 7800X3D BOX Creator Premium CPU Cost',
+			price=49800,
+			specs={'socket': 'AM5'},
+			url='https://example.com/cpu-7800x3d-creator-premium-cpu-cost',
+		)
+		PCPart.objects.create(
+			part_type='cpu',
+			name='AMD Ryzen 9 9950X3D BOX Creator Premium CPU Cost',
+			price=114470,
+			specs={'socket': 'AM5'},
+			url='https://example.com/cpu-9950x3d-creator-premium-cpu-cost',
+		)
+		PCPart.objects.create(
+			part_type='gpu',
+			name='ASRock Radeon AI PRO R9700 Creator 32GB',
+			price=259800,
+			specs={'vram': '32GB'},
+			url='https://example.com/gpu-r9700-creator-premium-cpu-cost',
+		)
+		PCPart.objects.create(
+			part_type='motherboard',
+			name='X870 Creator Premium CPU Cost',
+			price=35970,
+			specs={'socket': 'AM5', 'memory_type': 'DDR5', 'form_factor': 'ATX'},
+			url='https://example.com/mb-creator-premium-cpu-cost',
+		)
+		PCPart.objects.create(
+			part_type='memory',
+			name='DDR5 64GB Creator Premium CPU Cost',
+			price=39800,
+			specs={'memory_type': 'DDR5', 'capacity_gb': 64, 'speed_mhz': 5600},
+			url='https://example.com/memory-creator-premium-cpu-cost',
+		)
+		PCPart.objects.create(
+			part_type='storage',
+			name='NVMe 2TB Creator Premium CPU Cost',
+			price=22000,
+			specs={'interface': 'NVMe', 'capacity_gb': 2000},
+			url='https://example.com/storage-creator-premium-cpu-cost',
+		)
+		PCPart.objects.create(
+			part_type='cpu_cooler',
+			name='Air Cooler Creator Premium CPU Cost',
+			price=8000,
+			specs={'supported_sockets': ['AM5']},
+			url='https://example.com/cooler-creator-premium-cpu-cost',
+		)
+		PCPart.objects.create(
+			part_type='os',
+			name='Windows 11 Home Creator Premium CPU Cost',
+			price=17000,
+			specs={},
+			url='https://example.com/os-creator-premium-cpu-cost',
+		)
+		PCPart.objects.create(
+			part_type='psu',
+			name='1000W PSU Creator Premium CPU Cost',
+			price=16580,
+			specs={'wattage': 1000},
+			url='https://example.com/psu-creator-premium-cpu-cost',
+		)
+		PCPart.objects.create(
+			part_type='case',
+			name='ATX Case Creator Premium CPU Cost',
+			price=6000,
+			specs={'supported_form_factors': ['ATX']},
+			url='https://example.com/case-creator-premium-cpu-cost',
+		)
+
+		response_data, error_response = build_configuration_response(
+			1294980,
+			'creator',
+			build_priority='cost',
+			persist=False,
+		)
+
+		self.assertIsNone(error_response)
+		parts = {p['category']: p for p in response_data.get('parts', [])}
+		self.assertEqual(parts['cpu']['name'], 'AMD Ryzen 9 9950X3D BOX Creator Premium CPU Cost')
+
+	def test_build_configuration_creator_premium_spec_prefers_9950x3d_cpu(self):
+		PCPart.objects.all().delete()
+
+		PCPart.objects.create(
+			part_type='cpu',
+			name='AMD Ryzen 7 7800X3D BOX Creator Premium CPU Spec',
+			price=49800,
+			specs={'socket': 'AM5'},
+			url='https://example.com/cpu-7800x3d-creator-premium-cpu-spec',
+		)
+		PCPart.objects.create(
+			part_type='cpu',
+			name='AMD Ryzen 9 9950X3D BOX Creator Premium CPU Spec',
+			price=114470,
+			specs={'socket': 'AM5'},
+			url='https://example.com/cpu-9950x3d-creator-premium-cpu-spec',
+		)
+		PCPart.objects.create(
+			part_type='gpu',
+			name='GeForce RTX 5090 32GB',
+			price=529800,
+			specs={'vram': '32GB'},
+			url='https://example.com/gpu-5090-creator-premium-cpu-spec',
+		)
+		PCPart.objects.create(
+			part_type='motherboard',
+			name='X870 Creator Premium CPU Spec',
+			price=35970,
+			specs={'socket': 'AM5', 'memory_type': 'DDR5', 'form_factor': 'ATX'},
+			url='https://example.com/mb-creator-premium-cpu-spec',
+		)
+		PCPart.objects.create(
+			part_type='memory',
+			name='DDR5 64GB Creator Premium CPU Spec',
+			price=39800,
+			specs={'memory_type': 'DDR5', 'capacity_gb': 64, 'speed_mhz': 6400},
+			url='https://example.com/memory-creator-premium-cpu-spec',
+		)
+		PCPart.objects.create(
+			part_type='storage',
+			name='NVMe 2TB Creator Premium CPU Spec',
+			price=22000,
+			specs={'interface': 'NVMe', 'capacity_gb': 2000},
+			url='https://example.com/storage-creator-premium-cpu-spec',
+		)
+		PCPart.objects.create(
+			part_type='cpu_cooler',
+			name='AIO Cooler Creator Premium CPU Spec',
+			price=19990,
+			specs={'supported_sockets': ['AM5']},
+			url='https://example.com/cooler-creator-premium-cpu-spec',
+		)
+		PCPart.objects.create(
+			part_type='os',
+			name='Windows 11 Pro Creator Premium CPU Spec',
+			price=23980,
+			specs={},
+			url='https://example.com/os-creator-premium-cpu-spec',
+		)
+		PCPart.objects.create(
+			part_type='psu',
+			name='1000W PSU Creator Premium CPU Spec',
+			price=16580,
+			specs={'wattage': 1000},
+			url='https://example.com/psu-creator-premium-cpu-spec',
+		)
+		PCPart.objects.create(
+			part_type='case',
+			name='ATX Case Creator Premium CPU Spec',
+			price=6000,
+			specs={'supported_form_factors': ['ATX']},
+			url='https://example.com/case-creator-premium-cpu-spec',
+		)
+
+		response_data, error_response = build_configuration_response(
+			1294980,
+			'creator',
+			build_priority='spec',
+			persist=False,
+		)
+
+		self.assertIsNone(error_response)
+		parts = {p['category']: p for p in response_data.get('parts', [])}
+		self.assertEqual(parts['cpu']['name'], 'AMD Ryzen 9 9950X3D BOX Creator Premium CPU Spec')
+
+	def test_creator_premium_cpu_priority_prefers_9950x_over_285k(self):
+		cpu_9950x = PCPart(
+			part_type='cpu',
+			name='AMD Ryzen 9 9950X BOX Creator Premium Priority',
+			price=101000,
+			specs={'socket': 'AM5'},
+			url='https://example.com/cpu-9950x-creator-premium-priority',
+		)
+		cpu_285k = PCPart(
+			part_type='cpu',
+			name='Intel Core Ultra 9 285K BOX Creator Premium Priority',
+			price=98000,
+			specs={'socket': 'LGA1851'},
+			url='https://example.com/cpu-285k-creator-premium-priority',
+		)
+
+		picked_cost = _prefer_creator_premium_cpu([cpu_285k, cpu_9950x], build_priority='cost')
+		picked_spec = _prefer_creator_premium_cpu([cpu_285k, cpu_9950x], build_priority='spec')
+
+		self.assertIsNotNone(picked_cost)
+		self.assertIsNotNone(picked_spec)
+		self.assertEqual(picked_cost.name, 'AMD Ryzen 9 9950X BOX Creator Premium Priority')
+		self.assertEqual(picked_spec.name, 'AMD Ryzen 9 9950X BOX Creator Premium Priority')
 
 	def test_generate_config_prefers_x3d_cpu_for_gaming_when_vendor_is_any(self):
 		self.cpu.delete()
