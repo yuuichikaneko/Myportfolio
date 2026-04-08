@@ -1,5 +1,19 @@
 const API_BASE_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8002/api";
 
+/**
+ * 構成生成APIで受け付ける用途コード。
+ * 正規値は gaming / creator / ai / general。
+ * 旧データ互換のため、business / standard / video_editing も受け付ける。
+ */
+export type UsageCode =
+  | "gaming"
+  | "creator"
+  | "ai"
+  | "general"
+  | "business"
+  | "standard"
+  | "video_editing";
+
 export interface CustomBudgetWeights {
   cpu: number;
   cpu_cooler: number;
@@ -12,6 +26,7 @@ export interface CustomBudgetWeights {
   case: number;
 }
 
+// API との通信失敗を共通化する。
 async function safeFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   try {
     return await fetch(input, init);
@@ -22,6 +37,7 @@ async function safeFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   }
 }
 
+// API エラーの本文を整形し、必要なら推奨予算を付加する。
 async function parseApiError(response: Response, fallbackMessage: string): Promise<Error> {
   try {
     const error = await response.json();
@@ -36,9 +52,13 @@ async function parseApiError(response: Response, fallbackMessage: string): Promi
   }
 }
 
+/**
+ * 構成生成APIのリクエスト形式。
+ * 予算と用途コードを必須とし、追加の詳細条件は任意で指定する。
+ */
 export interface GenerateConfigRequest {
   budget: number;
-  usage: "gaming" | "creator" | "business" | "standard" | "video_editing" | "general";
+  usage: UsageCode;
   cooler_type?: "air" | "liquid";
   radiator_size?: "120" | "240" | "360";
   cooling_profile?: "silent" | "performance";
@@ -62,8 +82,12 @@ export interface PartResponse {
   specs?: Record<string, unknown> | null;
 }
 
+/**
+ * 構成生成APIのレスポンス形式。
+ * 選択した用途コード、合計金額、構成パーツ一覧を返す。
+ */
 export interface GenerateConfigResponse {
-  usage: string;
+  usage: UsageCode;
   budget: number;
   requested_budget?: number;
   budget_auto_adjusted?: boolean;
@@ -106,7 +130,7 @@ export interface SavedPartResponse {
 export interface SavedConfigurationResponse {
   id: number;
   budget: number;
-  usage: "gaming" | "creator" | "business" | "standard" | "video_editing" | "general";
+  usage: UsageCode;
   usage_display: string;
   total_price: number;
   cpu_data: SavedPartResponse | null;
