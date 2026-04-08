@@ -5195,6 +5195,170 @@ class ScraperApiTests(APITestCase):
 		self.assertEqual(cost_response.status_code, status.HTTP_200_OK)
 
 
+class UsageConversionRegressionTests(APITestCase):
+	def setUp(self):
+		PCPart.objects.create(
+			part_type='cpu',
+			name='AMD Ryzen 7 7800X3D Gaming',
+			price=58980,
+			specs={'socket': 'AM5', 'cores': 8, 'threads': 16},
+			url='https://example.com/cpu-7800x3d-regression',
+		)
+		PCPart.objects.create(
+			part_type='cpu',
+			name='AMD Ryzen 9 7900 Creator',
+			price=54800,
+			specs={'socket': 'AM5', 'cores': 12, 'threads': 24},
+			url='https://example.com/cpu-7900-creator-regression',
+		)
+		PCPart.objects.create(
+			part_type='cpu',
+			name='AMD Ryzen 5 8600G General',
+			price=33800,
+			specs={'socket': 'AM5', 'cores': 6, 'threads': 12},
+			url='https://example.com/cpu-8600g-general-regression',
+		)
+		PCPart.objects.create(
+			part_type='motherboard',
+			name='B650 DDR5 Board Regression',
+			price=19800,
+			specs={'socket': 'AM5', 'memory_type': 'DDR5', 'form_factor': 'ATX'},
+			url='https://example.com/mb-b650-regression',
+		)
+		PCPart.objects.create(
+			part_type='memory',
+			name='DDR5 16GB Regression',
+			price=9800,
+			specs={'memory_type': 'DDR5', 'capacity_gb': 16},
+			url='https://example.com/mem-ddr5-16-regression',
+		)
+		PCPart.objects.create(
+			part_type='memory',
+			name='DDR5 32GB Regression',
+			price=17800,
+			specs={'memory_type': 'DDR5', 'capacity_gb': 32},
+			url='https://example.com/mem-ddr5-32-regression',
+		)
+		PCPart.objects.create(
+			part_type='storage',
+			name='NVMe 512GB Regression',
+			price=6800,
+			specs={'interface': 'NVMe', 'capacity_gb': 512},
+			url='https://example.com/storage-512-regression',
+		)
+		PCPart.objects.create(
+			part_type='storage',
+			name='NVMe 1TB Regression',
+			price=9800,
+			specs={'interface': 'NVMe', 'capacity_gb': 1000},
+			url='https://example.com/storage-1tb-regression',
+		)
+		PCPart.objects.create(
+			part_type='gpu',
+			name='NVIDIA GeForce RTX 4060 8GB Regression',
+			price=46800,
+			specs={'vram': '8GB', 'memory_gb': 8},
+			url='https://example.com/gpu-4060-8gb-regression',
+		)
+		PCPart.objects.create(
+			part_type='gpu',
+			name='NVIDIA GeForce RTX 4070 12GB Regression',
+			price=69800,
+			specs={'vram': '12GB', 'memory_gb': 12},
+			url='https://example.com/gpu-4070-12gb-regression',
+		)
+		PCPart.objects.create(
+			part_type='cpu_cooler',
+			name='Tower Air Cooler Regression',
+			price=5200,
+			specs={'supported_sockets': ['AM5']},
+			url='https://example.com/cooler-air-regression',
+		)
+		PCPart.objects.create(
+			part_type='psu',
+			name='750W PSU Regression',
+			price=9500,
+			specs={'wattage': 750},
+			url='https://example.com/psu-750-regression',
+		)
+		PCPart.objects.create(
+			part_type='case',
+			name='ATX Case Regression',
+			price=6500,
+			specs={'supported_form_factors': ['ATX']},
+			url='https://example.com/case-atx-regression',
+		)
+		PCPart.objects.create(
+			part_type='os',
+			name='Windows 11 Home Regression',
+			price=16800,
+			specs={},
+			url='https://example.com/os-home-regression',
+		)
+
+	def _post_generate(self, usage, budget=260000):
+		return self.client.post(
+			'/api/generate-config/',
+			{'budget': budget, 'usage': usage, 'build_priority': 'cost'},
+			format='json',
+		)
+
+	def test_generate_config_accepts_all_canonical_usage_codes(self):
+		for usage in ['gaming', 'creator', 'ai', 'general']:
+			with self.subTest(usage=usage):
+				response = self._post_generate(usage)
+				self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+				self.assertEqual(response.data.get('usage'), usage)
+
+	def test_generate_config_converts_legacy_usage_codes_to_canonical(self):
+		expected_pairs = {
+			'video_editing': 'creator',
+			'business': 'general',
+			'standard': 'general',
+		}
+		for legacy_usage, expected_usage in expected_pairs.items():
+			with self.subTest(legacy_usage=legacy_usage):
+				response = self._post_generate(legacy_usage)
+				self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+				self.assertEqual(response.data.get('usage'), expected_usage)
+
+	def test_generate_config_rejects_unsupported_usage(self):
+		response = self._post_generate('workstation')
+		self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+		self.assertIn('usage', str(response.data.get('detail', '')).lower())
+
+	def test_generate_config_usage_rules_and_required_fields(self):
+		creator_response = self._post_generate('creator')
+		ai_response = self._post_generate('ai')
+		general_response = self._post_generate('general')
+
+		self.assertEqual(creator_response.status_code, status.HTTP_200_OK, creator_response.data)
+		self.assertEqual(ai_response.status_code, status.HTTP_200_OK, ai_response.data)
+		self.assertEqual(general_response.status_code, status.HTTP_200_OK, general_response.data)
+
+		for response in [creator_response, ai_response, general_response]:
+			self.assertIn('usage', response.data)
+			self.assertIn('budget', response.data)
+			self.assertIn('total_price', response.data)
+			self.assertIn('parts', response.data)
+			self.assertIsInstance(response.data['parts'], list)
+
+		creator_parts = {part['category']: part for part in creator_response.data['parts']}
+		ai_parts = {part['category']: part for part in ai_response.data['parts']}
+		general_parts = {part['category']: part for part in general_response.data['parts']}
+
+		self.assertIn('32GB', creator_parts['memory']['name'])
+		self.assertIn('1TB', creator_parts['storage']['name'])
+
+		self.assertGreater(ai_parts['gpu']['price'], 0)
+		self.assertIn('8GB', ai_parts['gpu']['name'])
+		self.assertIn('32GB', ai_parts['memory']['name'])
+		self.assertIn('1TB', ai_parts['storage']['name'])
+
+		self.assertEqual(general_parts['gpu']['name'], '内蔵GPU（統合グラフィックス）')
+		self.assertEqual(general_parts['gpu']['price'], 0)
+
+
 class DosparaScraperTests(APITestCase):
 	class _DummyResponse:
 		def __init__(self, text='', json_data=None):
