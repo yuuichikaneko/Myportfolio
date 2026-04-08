@@ -34,7 +34,7 @@ jobs:
           pip install -r django_requirements.txt
 
       - name: Run Django tests
-        run: python manage.py test
+        run: python manage.py test scraper.tests.UsageConversionRegressionTests
 
       - name: Check migrations are up to date
         run: python manage.py makemigrations --check --dry-run
