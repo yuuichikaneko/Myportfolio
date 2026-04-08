@@ -3,6 +3,7 @@ import {
   getMarketPriceRange,
   getPartPriceRanges,
   getStorageInventory,
+  type UsageCode,
   type CustomBudgetWeights,
   type PartPriceRange,
   type StorageInventoryResponse,
@@ -24,7 +25,7 @@ const FALLBACK_MARKET_PRICE_RANGE: MarketRangeState = {
 interface ConfigFormProps {
   onSubmit: (
     budget: number,
-    usage: string,
+    usage: UsageCode,
     options: {
       coolerType: "air" | "liquid";
       radiatorSize: "120" | "240" | "360";
@@ -71,9 +72,9 @@ const CUSTOM_BUDGET_WEIGHT_FIELDS: Array<{ key: keyof CustomBudgetWeights; label
 
 const USAGE_OPTIONS = [
   { value: "gaming", label: "ゲーミングPC", icon: "🎮", desc: "GPU重視・高フレームレート向け" },
-  { value: "creator", label: "クリエイターPC", icon: "🎨", desc: "動画編集・3DCG・配信向け" },
-  { value: "business", label: "ビジネスPC", icon: "💼", desc: "オフィス作業・安定運用重視" },
-  { value: "standard", label: "スタンダードPC", icon: "🖥️", desc: "日常使い・バランス型" },
+  { value: "creator", label: "クリエイターPC", icon: "🎨", desc: "動画編集・配信・ゲーム配信向け" },
+  { value: "ai", label: "AI PC（ローカルAI）", icon: "🧠", desc: "ローカルLLM・画像生成向け" },
+  { value: "general", label: "汎用PC（事務・学習向け）", icon: "💼", desc: "事務作業・学習・軽い開発向け" },
 ] as const;
 
 const COOLER_OPTIONS = [
@@ -191,14 +192,14 @@ function inferStorageMediaType(item: StorageInventoryResponse["capacity_summary"
   if (text.includes("ssd") || formFactor.includes("m.2") || formFactor.includes("2.5inch") || text.includes("m.2")) {
     return "ssd";
   }
-  // WD SSD モデル番号
+  // Western Digital の SSD 系モデル番号を SSD として判定する。
   if (/\b(sa500|sn500|sn580|sn700|sn750|sn850)\b/.test(text)) {
     return "ssd";
   }
   if (/(5400|7200|10000|15000)\s*rpm/i.test(item.name)) {
     return "hdd";
   }
-  // HDD キーワード ─ "wd red" 単体は SSD モデルと被るため除外
+  // HDD 系キーワードを判定する。wd red 単体は SSD 系と紛らわしいため除外する。
   const hddKeywords = [
     "barracuda",
     "ironwolf",
@@ -254,7 +255,7 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
   const [marketRangeLoading, setMarketRangeLoading] = useState(true);
   const [marketRangeError, setMarketRangeError] = useState<string | null>(null);
   const [budget, setBudget] = useState(FALLBACK_MARKET_PRICE_RANGE.default);
-  const [usage, setUsage] = useState("gaming");
+  const [usage, setUsage] = useState<UsageCode>("gaming");
   const [coolerType, setCoolerType] = useState<"air" | "liquid">("air");
   const [radiatorSize, setRadiatorSize] = useState<"120" | "240" | "360">("240");
   const [coolingProfile, setCoolingProfile] = useState<"silent" | "performance">("performance");
@@ -349,7 +350,7 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
   }, []);
 
   useEffect(() => {
-    if (usage === "business" || usage === "standard") {
+    if (usage === "general") {
       setBudget(Math.max(0, marketRange.min - 15000));
     }
   }, [usage, marketRange.min]);
@@ -425,8 +426,8 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
       ];
     }
 
-    if (usage === "standard") {
-      const bases = [89980, 109980, 172980, 249980];
+    if (usage === "ai") {
+      const bases = [229980, 329980, 499980, 749980];
       const [entry, middle, high, flagship] = toPresetValues(bases);
       return [
         { label: "ローエンド", value: entry },
@@ -436,14 +437,9 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
       ];
     }
 
-    if (usage === "business") {
-      const costBases = [
-        Math.max(0, min - sub),
-        Math.max(0, Math.round((min * 1.3) / 10000) * 10000 - sub),
-        Math.max(0, Math.round((min * 1.7) / 10000) * 10000 - sub),
-        Math.max(0, Math.round((min * 2.2) / 10000) * 10000 - sub),
-      ];
-      const [entry, middle, high, flagship] = costBases.map((value) => applyPriorityPremium(value));
+    if (usage === "general") {
+      const bases = [69980, 89980, 119980, 169980];
+      const [entry, middle, high, flagship] = toPresetValues(bases);
       return [
         { label: "ローエンド", value: entry },
         { label: "ミドル", value: middle },
