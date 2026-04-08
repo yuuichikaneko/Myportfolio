@@ -234,7 +234,7 @@ export function ResultView({ config, onBack }: ResultProps) {
     });
   };
 
-  const IGPU_USAGES = new Set(["business", "standard"]);
+  const IGPU_USAGES = new Set(["general", "business", "standard"]);
 
   const normalizedParts: NormalizedResultPart[] = isSavedConfiguration(config)
     ? (() => {
@@ -529,7 +529,7 @@ export function ResultView({ config, onBack }: ResultProps) {
     gaming: "ゲーミングPC",
     creator: "クリエイターPC",
     ai: "AI PC（ローカルAI）",
-    general: "汎用PC",
+    general: "汎用PC（事務・学習向け）",
   };
   const usageCode = normalizeUsageCode(config.usage);
   const usageLabel = USAGE_LABELS[usageCode] ?? usageCode;
