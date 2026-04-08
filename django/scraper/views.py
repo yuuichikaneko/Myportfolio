@@ -29,9 +29,29 @@ _CPU_SELECTION_CACHE = {
 
 
 PART_ORDER = ['cpu', 'gpu', 'motherboard', 'memory', 'storage', 'cpu_cooler', 'os', 'case', 'psu']
+CANONICAL_USAGE_CODES = frozenset({'gaming', 'creator', 'ai', 'general'})
+USAGE_COMPAT_ALIASES = {
+    'video_editing': 'creator',
+    'business': 'general',
+    'standard': 'general',
+}
+
+
+def _normalize_usage_code(value):
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().lower()
+    normalized = USAGE_COMPAT_ALIASES.get(normalized, normalized)
+    if normalized in CANONICAL_USAGE_CODES:
+        return normalized
+    return None
+
+
 USAGE_POWER_MAP = {
     'gaming': 550,    # ゲーミング: GPU高負荷
     'creator': 500,   # クリエイター: CPU+GPU高負荷
+    'ai': 650,        # AI: GPU高負荷 + 連続実行
+    'general': 300,   # 汎用: 省電力寄り
     'business': 350,  # ビジネス: 省電力
     'standard': 400,  # スタンダード: 標準
 }
@@ -60,6 +80,30 @@ USAGE_BUDGET_WEIGHTS = {
         'os': 0.05,
         'psu': 0.06,
         'case': 0.02,
+    },
+    # AI: VRAM/メモリ/電源・冷却を重視
+    'ai': {
+        'cpu': 0.16,
+        'cpu_cooler': 0.09,
+        'gpu': 0.32,
+        'motherboard': 0.11,
+        'memory': 0.14,
+        'storage': 0.08,
+        'os': 0.04,
+        'psu': 0.05,
+        'case': 0.01,
+    },
+    # 汎用: コスト効率重視
+    'general': {
+        'cpu': 0.20,
+        'cpu_cooler': 0.04,
+        'gpu': 0.08,
+        'motherboard': 0.14,
+        'memory': 0.13,
+        'storage': 0.11,
+        'os': 0.06,
+        'psu': 0.10,
+        'case': 0.14,
     },
     # ビジネス: CPU中程度、GPU控えめ、信頼性重視
     'business': {
@@ -126,6 +170,18 @@ PART_PRICE_BANDS_BY_USAGE_TIER = {
             'high': (0.12, 0.24),
             'premium': (0.14, 0.28),
         },
+        'ai': {
+            'low': (0.08, 0.16),
+            'middle': (0.10, 0.20),
+            'high': (0.12, 0.24),
+            'premium': (0.14, 0.28),
+        },
+        'general': {
+            'low': (0.03, 0.12),
+            'middle': (0.04, 0.14),
+            'high': (0.05, 0.16),
+            'premium': (0.08, 0.18),
+        },
         'business': {
             'low': (0.03, 0.12),
             'middle': (0.04, 0.14),
@@ -152,6 +208,18 @@ PART_PRICE_BANDS_BY_USAGE_TIER = {
             'high': (0.05, 0.12),
             'premium': (0.06, 0.14),
         },
+        'ai': {
+            'low': (0.03, 0.08),
+            'middle': (0.04, 0.10),
+            'high': (0.05, 0.12),
+            'premium': (0.06, 0.14),
+        },
+        'general': {
+            'low': (0.02, 0.06),
+            'middle': (0.03, 0.07),
+            'high': (0.03, 0.08),
+            'premium': (0.04, 0.09),
+        },
         'business': {
             'low': (0.02, 0.06),
             'middle': (0.03, 0.07),
@@ -172,15 +240,27 @@ CATEGORY_DROP_PRIORITY = ['case', 'storage', 'memory', 'cpu_cooler', 'motherboar
 UPGRADE_PRIORITY_BY_USAGE = {
     'gaming':   ['gpu', 'cpu', 'cpu_cooler', 'memory', 'storage', 'motherboard', 'psu', 'case'],
     'creator':  ['cpu', 'motherboard', 'memory', 'gpu', 'storage', 'cpu_cooler', 'psu', 'case'],
+    'ai':       ['gpu', 'memory', 'cpu', 'storage', 'motherboard', 'cpu_cooler', 'psu', 'case'],
+    'general':  ['cpu', 'memory', 'storage', 'motherboard', 'cpu_cooler', 'psu', 'case'],
     'business': ['cpu', 'memory', 'storage', 'motherboard', 'cpu_cooler', 'psu', 'case'],
     'standard': ['cpu', 'memory', 'storage', 'motherboard', 'cpu_cooler', 'psu', 'case'],
 }
 
 # 内蔵GPU(iGPU)使用: ビジネス・スタンダードはdGPU不要
-IGPU_USAGES = frozenset({'business', 'standard'})
+IGPU_USAGES = frozenset({'general', 'business', 'standard'})
 
 # GPUウェイト分を他パーツへ再分配した予算配分
 IGPU_BUDGET_WEIGHTS = {
+    'general': {
+        'cpu': 0.24,
+        'cpu_cooler': 0.06,
+        'motherboard': 0.18,
+        'memory': 0.18,
+        'storage': 0.12,
+        'os': 0.06,
+        'psu': 0.10,
+        'case': 0.08,
+    },
     'business': {
         'cpu': 0.25,
         'cpu_cooler': 0.05,
@@ -204,6 +284,7 @@ IGPU_BUDGET_WEIGHTS = {
 }
 
 IGPU_POWER_MAP = {
+    'general': 300,
     'business': 250,
     'standard': 300,
 }
@@ -586,6 +667,7 @@ def _resolve_os_edition_by_usage(usage, os_edition):
 
     auto_map = {
         'gaming': 'home',
+        'ai': 'pro',
         'standard': 'home',
         'general': 'home',
         'creator': 'pro',
@@ -4083,12 +4165,16 @@ def _target_memory_profile(budget, usage, options=None):
     options = options or {}
     build_priority = options.get('build_priority')
 
-    if usage == 'creator':
+    if usage in {'creator', 'ai'}:
+        if usage == 'ai':
+            if budget >= 500000:
+                return {'capacity_gb': 64, 'preferred_modules': 2}
+            return {'capacity_gb': 32, 'preferred_modules': 2}
         if budget >= 500000:
             return {'capacity_gb': 64, 'preferred_modules': 2}
         if budget >= 250000:
             return {'capacity_gb': 32, 'preferred_modules': 2}
-        return {'capacity_gb': 16, 'preferred_modules': 2}
+        return {'capacity_gb': 32, 'preferred_modules': 2}
 
     if usage == 'gaming':
         if build_priority == 'spec':
@@ -4109,7 +4195,7 @@ def _target_memory_profile(budget, usage, options=None):
             return {'capacity_gb': 16, 'preferred_modules': 2}
         return {'capacity_gb': 8, 'preferred_modules': 1}
 
-    if usage in {'business', 'standard'}:
+    if usage in {'general', 'business', 'standard'}:
         if build_priority == 'cost':
             # コスト重視: 段階的容量（gaming に合わせた戦略）
             if budget >= 300000:
@@ -4131,7 +4217,7 @@ def _memory_profile_pick(candidates, build_priority, budget=None, usage=None, op
         return None
 
     options = options or {}
-    target_profile = _target_memory_profile(budget or 0, usage or options.get('usage', 'standard'), options=options)
+    target_profile = _target_memory_profile(budget or 0, usage or options.get('usage', 'general'), options=options)
     target_capacity = target_profile['capacity_gb']
     preferred_modules = target_profile['preferred_modules']
 
@@ -4151,15 +4237,15 @@ def _memory_profile_pick(candidates, build_priority, budget=None, usage=None, op
             candidates = speed_filtered
 
     if build_priority == 'cost':
-        creator_min_capacity_gb = 16 if (usage or options.get('usage')) == 'creator' else 0
+        current_usage = usage or options.get('usage', 'general')
+        creator_min_capacity_gb = 32 if current_usage in {'creator', 'ai'} else 0
         
         # usage別の preferred_capacity_gb 設定（fallback ロジック用）
-        current_usage = usage or options.get('usage', 'standard')
         budget_val = budget or 0
         
         if current_usage == 'gaming':
             preferred_capacity_gb = 16 if budget_val >= 220000 else 8
-        elif current_usage in {'business', 'standard'}:
+        elif current_usage in {'general', 'business', 'standard'}:
             if budget_val >= 300000:
                 preferred_capacity_gb = 32
             elif budget_val >= 200000:
@@ -4184,7 +4270,7 @@ def _memory_profile_pick(candidates, build_priority, budget=None, usage=None, op
         )[0]
 
     if build_priority == 'spec':
-        current_usage = usage or options.get('usage', 'standard')
+        current_usage = usage or options.get('usage', 'general')
         if current_usage == 'gaming':
             return sorted(
                 candidates,
@@ -4517,7 +4603,7 @@ def _matches_selection_options(part_type, part, options=None):
     require_preferred_gaming_gpu = options.get('require_preferred_gaming_gpu', False)
     minimum_gaming_gpu_tier = options.get('minimum_gaming_gpu_tier', 1)
     required_psu_wattage = options.get('required_psu_wattage')
-    usage = options.get('usage', 'standard')
+    usage = options.get('usage', 'general')
     enforce_main_storage_ssd = options.get('enforce_main_storage_ssd', True)
     require_gaming_x3d_cpu = options.get('require_gaming_x3d_cpu', False)
 
@@ -4531,7 +4617,7 @@ def _matches_selection_options(part_type, part, options=None):
             return False
         if not _is_allowed_cpu_cooler_brand(part):
             return False
-        if usage == 'creator' and not (_is_liquid_cooler(part) or _is_dual_tower_cooler(part)):
+        if usage in {'creator', 'ai'} and not (_is_liquid_cooler(part) or _is_dual_tower_cooler(part)):
             return False
         if cooler_type == 'liquid' and radiator_size != 'any' and not _is_radiator_size_match(part, radiator_size):
             return False
@@ -4576,6 +4662,8 @@ def _matches_selection_options(part_type, part, options=None):
         return _is_cpu_vendor_match(part, cpu_vendor)
 
     if part_type == 'gpu':
+        if usage == 'ai' and _infer_gpu_memory_gb(part) < 8:
+            return False
         if usage == 'gaming' and _is_gaming_creative_gpu(part):
             return False
         if usage == 'gaming' and not _is_gaming_gpu_within_priority_cap(
@@ -4624,7 +4712,9 @@ def _matches_selection_options(part_type, part, options=None):
                 return False
         if min_memory_speed_mhz and _infer_memory_speed_mhz(part) < int(min_memory_speed_mhz):
             return False
-        if usage == 'creator' and _infer_memory_capacity_gb(part) < 16:
+        if usage in {'creator', 'ai'} and _infer_memory_capacity_gb(part) < 32:
+            return False
+        if usage == 'general' and _infer_memory_capacity_gb(part) < 16:
             return False
         if max_memory_capacity_gb and _infer_memory_capacity_gb(part) > int(max_memory_capacity_gb):
             return False
@@ -6690,8 +6780,9 @@ def build_configuration_response(
     if not isinstance(budget, int) or budget < 50000 or budget > 1500000:
         return None, Response({'detail': 'budgetは50,000円以上1,500,000円以下で入力してください'}, status=status.HTTP_400_BAD_REQUEST)
 
-    if usage not in USAGE_POWER_MAP:
-        return None, Response({'detail': 'usage must be gaming, creator, business, or standard'}, status=status.HTTP_400_BAD_REQUEST)
+    usage = _normalize_usage_code(usage)
+    if usage is None:
+        return None, Response({'detail': 'usage must be gaming, creator, ai, or general'}, status=status.HTTP_400_BAD_REQUEST)
 
     input_budget = int(budget)
     market_price_range = None
@@ -6805,8 +6896,10 @@ def build_configuration_response(
 
     # すべてのユースケースでメインストレージの最低容量を設定（SSD候補を確保）
     if not selection_options.get('min_storage_capacity_gb'):
-        if usage in {'creator', 'business', 'standard'}:
-            selection_options = dict(selection_options)
+        selection_options = dict(selection_options)
+        if usage in {'creator', 'ai'}:
+            selection_options['min_storage_capacity_gb'] = 1000
+        elif usage == 'general':
             selection_options['min_storage_capacity_gb'] = 512
 
     if selection_options.get('max_storage_capacity_gb') and selection_options.get('min_storage_capacity_gb'):
