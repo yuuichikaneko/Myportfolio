@@ -2175,6 +2175,8 @@ class ScraperApiTests(APITestCase):
 
 		self.assertEqual(response.status_code, status.HTTP_200_OK)
 		parts = {p['category']: p for p in response.data['parts']}
+		self.assertIn('cpu', parts)
+		self.assertIn('gpu', parts)
 		self.assertEqual(parts['cpu']['name'], 'Ryzen 7 7700 Custom Weight')
 		self.assertIn(parts['gpu']['name'], {'RTX 4060', 'RTX 4060 Custom Weight'})
 		self.assertAlmostEqual(response.data['custom_budget_weights']['cpu'], 0.15, places=2)
@@ -3703,6 +3705,8 @@ class ScraperApiTests(APITestCase):
 
 		self.assertEqual(response.status_code, status.HTTP_200_OK)
 		parts = {p['category']: p for p in response.data['parts']}
+		self.assertIn('motherboard', parts)
+		self.assertIn('gpu', parts)
 		self.assertIn('X870 AM5', parts['motherboard']['name'])
 		self.assertNotIn('X870E', parts['motherboard']['name'])
 		self.assertEqual(parts['gpu']['name'], 'Palit GeForce RTX 5070 12GB')
@@ -4497,8 +4501,10 @@ class ScraperApiTests(APITestCase):
 		self.assertEqual(list_response.status_code, status.HTTP_200_OK)
 		self.assertEqual(list_response.data['count'], 1)
 		self.assertEqual(len(list_response.data['results']), 1)
-		self.assertEqual(list_response.data['results'][0]['id'], generate_response.data['configuration_id'])
-		self.assertEqual(list_response.data['results'][0]['cpu_data']['name'], 'Ryzen 7 9700X')
+		first_result = list_response.data['results'][0]
+		self.assertEqual(first_result['id'], generate_response.data['configuration_id'])
+		self.assertIsNotNone(first_result.get('cpu_data'))
+		self.assertEqual(first_result['cpu_data']['name'], 'Ryzen 7 9700X')
 
 	def test_configurations_delete_removes_saved_configuration(self):
 		generate_response = self.client.post(
