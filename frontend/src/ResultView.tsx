@@ -259,7 +259,7 @@ export function ResultView({ config, onBack }: ResultProps) {
               url: part.url,
               specs: part.specs,
             }));
-        // iGPU構成の場合: gpu_data=null なので保存済み構成でも内蔵GPU行を復元
+        // iGPU 構成では gpu_data が null になるため、保存済み構成でも内蔵GPU行を復元する。
         if (IGPU_USAGES.has(config.usage) && config.gpu_data === null) {
           const cpuIndexForIgpu = parts.findIndex((p) => p.category === "cpu");
           parts.splice(cpuIndexForIgpu + 1, 0, {
@@ -301,7 +301,7 @@ export function ResultView({ config, onBack }: ResultProps) {
     if (capacity > 0) {
       return capacity;
     }
-    // TB単位を優先、モデル番号埋め込み ("F20GB" 等) を除外
+    // 容量表記は TB を優先し、モデル番号に埋まった GB 表記は除外する。
     const tbMatch = part.name.match(/(?<![A-Za-z0-9])(\d+(?:\.\d+)?)\s*TB/i);
     if (tbMatch) {
       return Math.round(Number(tbMatch[1]) * 1024);
@@ -328,19 +328,19 @@ export function ResultView({ config, onBack }: ResultProps) {
     if (name.includes("sata")) {
       return "sata";
     }
-    // WD NVMe モデル番号 (SN500/580/700/750/850)
+    // Western Digital の NVMe 系モデル番号 (SN500/580/700/750/850) を判定する。
     if (/\bsn[5-9]\d{2}\b/.test(name)) {
       return "nvme";
     }
-    // WD SATA SSD モデル番号 (SA500)
+    // Western Digital の SATA SSD 系モデル番号 (SA500) を判定する。
     if (/\bsa\d{3}\b/.test(name)) {
       return "sata";
     }
-    // Samsung NVMe (970/980/990 EVO・PRO)
+    // Samsung の NVMe 系モデル番号 (970 / 980 / 990 EVO・PRO) を判定する。
     if (/\b(970|980|990)\s*(evo|pro)\b/i.test(name)) {
       return "nvme";
     }
-    // 名前に M.2 が含まれる → NVMe
+    // 名前に M.2 が含まれる場合は NVMe とみなす。
     if (name.includes("m.2")) {
       return "nvme";
     }
@@ -358,14 +358,14 @@ export function ResultView({ config, onBack }: ResultProps) {
     if (text.includes("ssd") || formFactor.includes("m.2") || formFactor.includes("2.5inch") || text.includes("m.2")) {
       return "ssd" as const;
     }
-    // WD SSD モデル番号
+    // Western Digital の SSD 系モデル番号を SSD として判定する。
     if (/\b(sa500|sn500|sn580|sn700|sn750|sn850)\b/.test(text)) {
       return "ssd" as const;
     }
     if (/(5400|7200|10000|15000)\s*rpm/i.test(part.name)) {
       return "hdd" as const;
     }
-    // HDD キーワード ─ "wd red" 単体は SSD モデルと被るため除外
+    // HDD 系キーワードを判定する。wd red 単体は SSD 系と紛らわしいため除外する。
     const hddKeywords = [
       "barracuda",
       "ironwolf",
@@ -512,15 +512,27 @@ export function ResultView({ config, onBack }: ResultProps) {
     ? config.id
     : config.configuration_id;
 
+  const normalizeUsageCode = (usage: string) => {
+    if (usage === "video_editing") {
+      return "creator";
+    }
+    if (usage === "business" || usage === "standard") {
+      return "general";
+    }
+    if (usage === "gaming" || usage === "creator" || usage === "ai" || usage === "general") {
+      return usage;
+    }
+    return usage;
+  };
+
   const USAGE_LABELS: Record<string, string> = {
     gaming: "ゲーミングPC",
     creator: "クリエイターPC",
-    business: "ビジネスPC",
-    standard: "スタンダードPC",
-    video_editing: "動画編集PC",
+    ai: "AI PC（ローカルAI）",
     general: "汎用PC",
   };
-  const usageLabel = USAGE_LABELS[config.usage] ?? config.usage;
+  const usageCode = normalizeUsageCode(config.usage);
+  const usageLabel = USAGE_LABELS[usageCode] ?? usageCode;
   const isAutoAdjusted = !isSavedConfiguration(config) && Boolean(config.budget_auto_adjusted);
   const marketBudgetAdjusted = !isSavedConfiguration(config) && Boolean(config.market_budget_adjusted);
   const marketBudgetNote = !isSavedConfiguration(config) ? (config.market_budget_note ?? "") : "";
@@ -544,7 +556,7 @@ export function ResultView({ config, onBack }: ResultProps) {
   const currentGpuModelKeyNormalized = currentGpuModelKey ? normalizeGpuModelKey(currentGpuModelKey) : null;
   const currentCpuPart = normalizedParts.find((part) => part.category === "cpu") ?? null;
   const currentCpuModelKey = currentCpuPart ? extractCpuModelKey(currentCpuPart.name) : null;
-  const isGamingUsage = config.usage === "gaming";
+  const isGamingUsage = usageCode === "gaming";
   const gamingCpuRankingMode = isGamingUsage && !isSavedConfiguration(config) && config.build_priority === "cost" ? "cost" : "spec";
 
   const [gpuComparison, setGpuComparison] = useState<GpuPerformanceCompareResponse | null>(null);

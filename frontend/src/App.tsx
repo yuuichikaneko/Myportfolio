@@ -10,6 +10,7 @@ import {
   getScraperStatus,
   SavedConfigurationResponse,
   ScraperStatus,
+  type UsageCode,
 } from "./api";
 
 function App() {
@@ -27,7 +28,7 @@ function App() {
   const [historyBulkDeleting, setHistoryBulkDeleting] = useState(false);
   const [deleteTargetConfig, setDeleteTargetConfig] = useState<SavedConfigurationResponse | null>(null);
   const [showHistory, setShowHistory] = useState(false);
-  const [historyUsageFilter, setHistoryUsageFilter] = useState<"all" | "gaming" | "video_editing" | "general">("all");
+  const [historyUsageFilter, setHistoryUsageFilter] = useState<"all" | UsageCode>("all");
   const [historyQuery, setHistoryQuery] = useState("");
   const [historyDeleteScope, setHistoryDeleteScope] = useState<"filtered" | "all">("filtered");
   const [historyToastMessage, setHistoryToastMessage] = useState<string | null>(null);
@@ -116,6 +117,19 @@ function App() {
     return `${config.usage}|${config.budget}|${partIds.join("-")}`;
   };
 
+  const normalizeUsageCode = (usage: string): UsageCode | "all" => {
+    if (usage === "video_editing") {
+      return "creator";
+    }
+    if (usage === "business" || usage === "standard") {
+      return "general";
+    }
+    if (usage === "gaming" || usage === "creator" || usage === "ai" || usage === "general") {
+      return usage;
+    }
+    return "all";
+  };
+
   const uniqueSavedConfigurations = useMemo(() => {
     const bySignature = new Map<string, SavedConfigurationResponse>();
     for (const config of savedConfigurations) {
@@ -132,7 +146,7 @@ function App() {
 
   const handleGenerateConfig = async (
     budget: number,
-    usage: string,
+    usage: UsageCode,
     options: {
       coolerType: "air" | "liquid";
       radiatorSize: "120" | "240" | "360";
@@ -158,7 +172,7 @@ function App() {
     try {
       const response = await generateConfig({
         budget,
-        usage: usage as "gaming" | "creator" | "business" | "standard" | "video_editing" | "general",
+        usage,
         cooler_type: options.coolerType,
         radiator_size: options.radiatorSize,
         cooling_profile: options.coolingProfile,
@@ -282,7 +296,7 @@ function App() {
   };
 
   const filteredHistory = uniqueSavedConfigurations.filter((config) => {
-    if (historyUsageFilter !== "all" && config.usage !== historyUsageFilter) {
+    if (historyUsageFilter !== "all" && normalizeUsageCode(config.usage) !== historyUsageFilter) {
       return false;
     }
 
@@ -414,13 +428,14 @@ function App() {
           <div className="space-y-2 mb-4">
             <select
               value={historyUsageFilter}
-              onChange={(e) => setHistoryUsageFilter(e.target.value as "all" | "gaming" | "video_editing" | "general")}
+              onChange={(e) => setHistoryUsageFilter(e.target.value as "all" | UsageCode)}
               className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-700"
             >
               <option value="all">用途: すべて</option>
               <option value="gaming">用途: ゲーミング</option>
-              <option value="video_editing">用途: 動画編集</option>
-              <option value="general">用途: 汎用</option>
+              <option value="creator">用途: クリエイターPC</option>
+              <option value="ai">用途: AI PC（ローカルAI）</option>
+              <option value="general">用途: 汎用PC（事務・学習向け）</option>
             </select>
             <input
               value={historyQuery}
