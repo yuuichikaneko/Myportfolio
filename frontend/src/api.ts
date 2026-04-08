@@ -89,6 +89,8 @@ export interface PartResponse {
 export interface GenerateConfigResponse {
   usage: UsageCode;
   budget: number;
+  budget_tier?: "low" | "middle" | "high" | "premium";
+  budget_tier_label?: string;
   requested_budget?: number;
   budget_auto_adjusted?: boolean;
   market_budget_adjusted?: boolean;
@@ -130,6 +132,8 @@ export interface SavedPartResponse {
 export interface SavedConfigurationResponse {
   id: number;
   budget: number;
+  budget_tier?: "low" | "middle" | "high" | "premium";
+  budget_tier_label?: string;
   usage: UsageCode;
   usage_display: string;
   total_price: number;

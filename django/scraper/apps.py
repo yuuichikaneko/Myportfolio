@@ -19,6 +19,7 @@ class ScraperConfig(AppConfig):
             try:
                 # 最新スナップショットが存在しするか確認
                 from .models import MarketPriceRangeSnapshot, CPUSelectionSnapshot, GPUPerformanceSnapshot
+                from .views import _load_latest_cpu_selection_scores, _load_latest_gpu_perf_scores
                 
                 market_exists = MarketPriceRangeSnapshot.objects.exists()
                 cpu_exists = CPUSelectionSnapshot.objects.exists()
@@ -37,6 +38,10 @@ class ScraperConfig(AppConfig):
                         print(" - Importing GPU performance scores...")
                         import_gpu_performance_scores_task(timeout=20)
                     print("[Scraper App Startup] Initialization complete.")
+
+                # 起動直後の初回選定でスナップショット読み込みスパイクを避ける。
+                _load_latest_cpu_selection_scores()
+                _load_latest_gpu_perf_scores()
             except Exception as e:
                 print(f"[Scraper App Startup] Initialization error: {e}")
         

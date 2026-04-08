@@ -119,4 +119,21 @@ describe("ConfigForm presets", () => {
       ).toBe(true);
     }
   });
+
+  it("raises the creator spec premium preset to a 5090-capable budget", async () => {
+    render(<ConfigForm onSubmit={() => undefined} isLoading={false} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("radio", { name: /クリエイターPC/ })).toBeInTheDocument();
+    });
+
+    await userEvent.click(screen.getByRole("radio", { name: /クリエイターPC/ }));
+    await userEvent.click(screen.getByRole("button", { name: "スペック重視" }));
+
+    const premiumButtons = screen.getAllByRole("button", { name: "プレミアム" });
+    const premiumButton = premiumButtons[premiumButtons.length - 1];
+    await userEvent.click(premiumButton);
+
+    expect(screen.getByRole("spinbutton")).toHaveValue(1314478);
+  });
 });

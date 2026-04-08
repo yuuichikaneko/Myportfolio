@@ -130,6 +130,10 @@ function extractCpuModelKey(text: string) {
   return null;
 }
 
+function normalizeCpuModelKey(text: string) {
+  return text.replace(/[^A-Z0-9]+/g, "").toUpperCase();
+}
+
 function formatCpuModelLabel(entry: CpuSelectionEntryResponse) {
   return entry.model_name;
 }
@@ -539,6 +543,19 @@ export function ResultView({ config, onBack }: ResultProps) {
   const requestedBudget = !isSavedConfiguration(config)
     ? (config.requested_budget ?? config.budget)
     : config.budget;
+  const buildPriorityCode: "cost" | "spec" | "balanced" = !isSavedConfiguration(config)
+    ? (config.build_priority ?? "balanced")
+    : "balanced";
+  const buildPriorityLabel = !isSavedConfiguration(config)
+    ? (
+        buildPriorityCode === "cost"
+          ? "コスト重視"
+          : buildPriorityCode === "spec"
+            ? "スペック重視"
+            : "バランス"
+      )
+    : "不明（保存履歴）";
+  const budgetTierLabel = config.budget_tier_label ?? "不明";
   const benchmarkFloorScore = !isSavedConfiguration(config)
     ? Number(config.minimum_gaming_gpu_perf_score ?? 0)
     : 0;
@@ -556,7 +573,11 @@ export function ResultView({ config, onBack }: ResultProps) {
   const currentGpuModelKeyNormalized = currentGpuModelKey ? normalizeGpuModelKey(currentGpuModelKey) : null;
   const currentCpuPart = normalizedParts.find((part) => part.category === "cpu") ?? null;
   const currentCpuModelKey = currentCpuPart ? extractCpuModelKey(currentCpuPart.name) : null;
+  const currentCpuModelKeyNormalized = currentCpuModelKey ? normalizeCpuModelKey(currentCpuModelKey) : null;
   const isGamingUsage = usageCode === "gaming";
+  const creatorCpuRecommendationText = usageCode === "creator"
+    ? "ゲーム配信をするならRyzen 9 9950X3Dがおすすめです。"
+    : "";
   const gamingCpuRankingMode = isGamingUsage && !isSavedConfiguration(config) && config.build_priority === "cost" ? "cost" : "spec";
 
   const [gpuComparison, setGpuComparison] = useState<GpuPerformanceCompareResponse | null>(null);
@@ -834,6 +855,15 @@ export function ResultView({ config, onBack }: ResultProps) {
             </span>
           </p>
 
+          <div className="mb-6 flex flex-wrap items-center gap-2 text-sm">
+            <span className="inline-flex items-center rounded-full bg-indigo-100 px-3 py-1 font-semibold text-indigo-800">
+              予算帯: {budgetTierLabel}
+            </span>
+            <span className="inline-flex items-center rounded-full bg-cyan-100 px-3 py-1 font-semibold text-cyan-800">
+              構成方針: {buildPriorityLabel}
+            </span>
+          </div>
+
           {isAutoAdjusted && (
             <div className="mb-6 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
               <p className="font-semibold">
@@ -926,6 +956,11 @@ export function ResultView({ config, onBack }: ResultProps) {
                 <p className="text-xs text-indigo-600">
                   {currentGpuPart ? `選択中GPU: ${currentGpuPart.name}` : "GPU比較対象は見つかりませんでした。"}
                 </p>
+                {usageCode === "creator" && (
+                  <p className="mt-1 text-xs text-indigo-600">
+                    クリエイターPCではVRAM容量を優先し、同条件ならNVIDIAを優先します。NVIDIA対応アプリが多く、高解像度編集や重い3D素材向けの選定です。
+                  </p>
+                )}
               </div>
               {gpuSnapshot && (
                 <p className="text-xs text-indigo-600">
@@ -1013,6 +1048,9 @@ export function ResultView({ config, onBack }: ResultProps) {
                       : "ゲーミングCPU順位（AMD・スペック順）"
                     : "CPU選考資料（AMD/Intel）"}
                 </p>
+                {creatorCpuRecommendationText && (
+                  <p className="mt-1 text-xs text-emerald-600">{creatorCpuRecommendationText}</p>
+                )}
                 <p className="text-xs text-emerald-600">
                   {currentCpuPart
                     ? `選択中CPU: ${currentCpuPart.name}`
@@ -1054,8 +1092,8 @@ export function ResultView({ config, onBack }: ResultProps) {
                   </thead>
                   <tbody>
                     {cpuComparison.results.slice(0, RANKING_DISPLAY_LIMIT).map((entry, index) => {
-                        const isCurrent = currentCpuModelKey
-                          ? entry.model_name.replace(/\s+/g, " ").trim().toUpperCase().includes(currentCpuModelKey)
+                        const isCurrent = currentCpuModelKeyNormalized
+                          ? normalizeCpuModelKey(entry.model_name) === currentCpuModelKeyNormalized
                           : false;
                         return (
                           <tr key={`${entry.vendor}:${entry.model_name}`} className={isCurrent ? "bg-emerald-100/80" : "bg-white/70"}>

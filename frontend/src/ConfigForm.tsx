@@ -448,7 +448,9 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
       ];
     }
 
-    const creatorBases = [199980, 299980, 449980, 699980];
+    const creatorBases = buildPriority === "spec"
+      ? [199980, 299980, 449980, 1209980]
+      : [199980, 299980, 449980, 699980];
     const [entry, middle, high, flagship] = toPresetValues(creatorBases);
 
     return [
