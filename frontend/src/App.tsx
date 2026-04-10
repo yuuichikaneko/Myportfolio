@@ -13,6 +13,11 @@ import {
   type UsageCode,
 } from "./api";
 
+interface OsBudgetToast {
+  point: string;
+  recommendedBudgetText: string;
+}
+
 function App() {
   const [result, setResult] = useState<GenerateConfigResponse | null>(null);
   const [selectedSavedConfig, setSelectedSavedConfig] = useState<SavedConfigurationResponse | null>(null);
@@ -32,6 +37,7 @@ function App() {
   const [historyQuery, setHistoryQuery] = useState("");
   const [historyDeleteScope, setHistoryDeleteScope] = useState<"filtered" | "all">("filtered");
   const [historyToastMessage, setHistoryToastMessage] = useState<string | null>(null);
+  const [osBudgetErrorToast, setOsBudgetErrorToast] = useState<OsBudgetToast | null>(null);
 
   useEffect(() => {
     if (!historyToastMessage) {
@@ -44,6 +50,18 @@ function App() {
 
     return () => window.clearTimeout(timer);
   }, [historyToastMessage]);
+
+  useEffect(() => {
+    if (!osBudgetErrorToast) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      setOsBudgetErrorToast(null);
+    }, 4500);
+
+    return () => window.clearTimeout(timer);
+  }, [osBudgetErrorToast]);
 
   const fetchSavedConfigurations = async () => {
     try {
@@ -118,6 +136,8 @@ function App() {
   };
 
   const normalizeUsageCode = (usage: string): UsageCode | "all" => {
+    // 注意: ResultView.tsx の normalizeUsageCode と同一ルールで維持すること。
+    // 片側のみ更新すると、履歴フィルタと結果表示の用途解釈がずれる。
     if (usage === "video_editing") {
       return "creator";
     }
@@ -166,6 +186,7 @@ function App() {
   ) => {
     setIsLoading(true);
     setError(null);
+    setOsBudgetErrorToast(null);
     setResult(null);
     setSelectedSavedConfig(null);
 
@@ -192,9 +213,18 @@ function App() {
       setHistoryLoading(true);
       await fetchSavedConfigurations();
     } catch (err) {
-      setError(
-        err instanceof Error ? err.message : "予期しないエラーが発生しました"
-      );
+      const errorMessage = err instanceof Error ? err.message : "予期しないエラーが発生しました";
+      setError(errorMessage);
+      if (errorMessage.includes("OS必須予算不足")) {
+        const recommendedMatch = errorMessage.match(/¥\s*([\d,]+)/);
+        const recommendedBudgetText = recommendedMatch
+          ? `¥${recommendedMatch[1]}`
+          : "予算を増やして再試行";
+        setOsBudgetErrorToast({
+          point: "OSを維持すると予算内に収まりません。",
+          recommendedBudgetText,
+        });
+      }
     } finally {
       setIsLoading(false);
     }
@@ -338,6 +368,8 @@ function App() {
   const isDeveloperViewEnabled =
     import.meta.env.DEV ||
     (typeof window !== "undefined" && window.localStorage.getItem("myportfolio:developer-mode") === "1");
+  const scraperCategoryStats = scraperStatus?.category_stats ?? [];
+  const scraperCachedCategories = scraperStatus?.cached_categories ?? [];
 
   useEffect(() => {
     // 画面切り替え時（フォーム→結果 / 結果→フォーム）は常に先頭へ移動する。
@@ -371,10 +403,39 @@ function App() {
       {isDeveloperViewEnabled && scraperStatus && !statusLoading && showStatus && (
         <div className="fixed bottom-16 left-4 bg-slate-50 border border-slate-300 rounded-lg p-4 shadow-lg text-sm max-w-xs z-50">
           <div className="font-semibold text-slate-700 mb-2">
-            取得済みパーツ一覧
-            <span className="ml-2 text-xs font-normal text-slate-500">
-              合計 {scraperStatus.total_parts_in_db} 件
-            </span>
+            最新スクレイプ状況
+          </div>
+          <div className="grid grid-cols-2 gap-2 mb-3 text-xs">
+            <div className="rounded-md bg-white border border-slate-200 px-2 py-1.5">
+              <div className="text-slate-500">DB件数</div>
+              <div className="mt-0.5 font-semibold text-slate-800 tabular-nums">
+                {scraperStatus.total_parts_in_db.toLocaleString("ja-JP")} 件
+              </div>
+            </div>
+            <div className="rounded-md bg-white border border-slate-200 px-2 py-1.5">
+              <div className="text-slate-500">キャッシュ</div>
+              <div className="mt-0.5 font-semibold text-slate-800">
+                {scraperStatus.cache_enabled ? "有効" : "無効"}
+              </div>
+            </div>
+            <div className="rounded-md bg-white border border-slate-200 px-2 py-1.5">
+              <div className="text-slate-500">TTL</div>
+              <div className="mt-0.5 font-semibold text-slate-800 tabular-nums">
+                {scraperStatus.cache_ttl_seconds.toLocaleString("ja-JP")} 秒
+              </div>
+            </div>
+            <div className="rounded-md bg-white border border-slate-200 px-2 py-1.5">
+              <div className="text-slate-500">再取得間隔</div>
+              <div className="mt-0.5 font-semibold text-slate-800 tabular-nums">
+                {scraperStatus.rate_limit_delay.toFixed(1)} 秒
+              </div>
+            </div>
+          </div>
+          <div className="mb-3 rounded-md bg-slate-100 px-2 py-1.5 text-xs text-slate-600">
+            対象カテゴリ: {scraperCachedCategories.join("、") || "なし"}
+          </div>
+          <div className="mb-3 rounded-md bg-slate-100 px-2 py-1.5 text-xs text-slate-600">
+            リトライ回数: {scraperStatus.retry_count}
           </div>
           <table className="w-full text-xs text-slate-600 border-collapse">
             <thead>
@@ -385,7 +446,7 @@ function App() {
               </tr>
             </thead>
             <tbody>
-              {scraperStatus.category_stats.map((stat) => (
+              {scraperCategoryStats.map((stat) => (
                 <tr key={stat.part_type} className="border-b border-slate-100 last:border-0">
                   <td className="py-1 pr-2">{stat.label}</td>
                   <td className="text-right py-1 pr-2 tabular-nums">{stat.count}</td>
@@ -398,11 +459,9 @@ function App() {
               ))}
             </tbody>
           </table>
-          {scraperStatus.last_update_time && (
-            <div className="mt-2 text-xs text-slate-400">
-              最終更新: {new Date(scraperStatus.last_update_time).toLocaleString("ja-JP")}
-            </div>
-          )}
+          <div className="mt-2 text-xs text-slate-400">
+            最終更新: {scraperStatus.last_update_time ? new Date(scraperStatus.last_update_time).toLocaleString("ja-JP") : "未取得"}
+          </div>
         </div>
       )}
 
@@ -562,6 +621,14 @@ function App() {
       {historyToastMessage && (
         <div className="fixed bottom-4 right-4 bg-slate-900 text-white text-sm px-4 py-3 rounded-lg shadow-lg z-[80]">
           {historyToastMessage}
+        </div>
+      )}
+
+      {osBudgetErrorToast && (
+        <div className="fixed top-20 right-4 max-w-md rounded-xl border-2 border-red-300 bg-red-50 px-4 py-3 text-red-900 shadow-xl z-[90]">
+          <div className="text-sm font-bold">OS必須予算不足</div>
+          <div className="mt-1 text-xs leading-relaxed">要点: {osBudgetErrorToast.point}</div>
+          <div className="mt-1 text-xs font-semibold">推奨予算: {osBudgetErrorToast.recommendedBudgetText}</div>
         </div>
       )}
 

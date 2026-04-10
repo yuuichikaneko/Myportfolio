@@ -83,12 +83,36 @@ WSGI_APPLICATION = 'myportfolio_django.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/4.2/ref/settings/#databases
 
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+DB_ENGINE = config('DB_ENGINE', default='sqlite3').strip().lower()
+
+if DB_ENGINE in ('postgresql', 'postgres', 'django.db.backends.postgresql'):
+    db_sslmode = config('DB_SSLMODE', default='prefer').strip()
+    db_client_encoding = config('DB_CLIENT_ENCODING', default='UTF8').strip()
+    db_options = {}
+    if db_sslmode:
+        db_options['sslmode'] = db_sslmode
+    if db_client_encoding:
+        db_options['client_encoding'] = db_client_encoding
+
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': config('DB_NAME', default='myportfolio'),
+            'USER': config('DB_USER', default='postgres'),
+            'PASSWORD': config('DB_PASSWORD', default='postgres'),
+            'HOST': config('DB_HOST', default='127.0.0.1'),
+            'PORT': config('DB_PORT', default=5432, cast=int),
+            'CONN_MAX_AGE': config('DB_CONN_MAX_AGE', default=60, cast=int),
+            'OPTIONS': db_options,
+        }
     }
-}
+else:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': BASE_DIR / config('SQLITE_NAME', default='db.sqlite3'),
+        }
+    }
 
 
 # Password validation

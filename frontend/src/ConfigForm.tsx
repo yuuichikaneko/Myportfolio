@@ -401,6 +401,9 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
   const presets = useMemo(() => {
     const min = marketRange.min;
     const sub = 15000;
+    // 注意: ここで算出する金額は UI の初期提案値であり、最終選定は backend 側で再計算される。
+    // backend の用途別固定方針（例: AI premium の CPU/GPU 優先）を変えた場合は、
+    // このプリセット基準値も合わせて見直すこと。
     const applyPriorityPremium = (value: number) => {
       const adjusted = buildPriority === "spec" ? Math.round(value * 1.1) : value;
       return Math.max(0, Math.min(budgetMax, adjusted));

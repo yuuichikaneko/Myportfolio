@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import App from "./App";
+import { generateConfig } from "./api";
 
 const apiMocks = vi.hoisted(() => ({
   getSavedConfigurationsMock: vi.fn(),
@@ -70,7 +71,7 @@ describe("App history panel", () => {
     apiMocks.getScraperStatusMock.mockResolvedValue({
       cache_enabled: true,
       cache_ttl_seconds: 3600,
-      last_update_time: null,
+      last_update_time: "2026-04-09T00:20:31.830142+00:00",
       cached_categories: ["cpu"],
       total_parts_in_db: 2,
       retry_count: 3,
@@ -121,6 +122,24 @@ describe("App history panel", () => {
     apiMocks.deleteSavedConfigurationMock.mockResolvedValue(undefined);
   });
 
+  it("shows dedicated toast when OS required budget error occurs", async () => {
+    vi.mocked(generateConfig).mockRejectedValueOnce(
+      new Error("OS必須予算不足: CPUクーラー/ケースを調整しても不足しています。最低でも¥80,000が必要です。")
+    );
+
+    render(<App />);
+
+    await userEvent.click(screen.getByRole("button", { name: "PC構成を提案してもらう" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("OS必須予算不足")).toBeInTheDocument();
+    });
+    const highlightedToast = screen.getByText("OS必須予算不足").closest("div.fixed.top-20.right-4");
+    expect(highlightedToast).toBeTruthy();
+    expect(highlightedToast).toHaveTextContent("要点: OSを維持すると予算内に収まりません。");
+    expect(highlightedToast).toHaveTextContent("推奨予算: ¥80,000");
+  });
+
   it("filters history by usage", async () => {
     render(<App />);
 
@@ -138,6 +157,24 @@ describe("App history panel", () => {
       expect(screen.getByText("Gaming")).toBeInTheDocument();
       expect(screen.queryByText("General")).not.toBeInTheDocument();
     });
+  });
+
+  it("shows latest scraper status in developer panel", async () => {
+    render(<App />);
+
+    await screen.findByRole("button", { name: "保存履歴 2" });
+    await userEvent.click(screen.getByRole("button", { name: "▶ スクレイパー" }));
+
+    expect(screen.getByText("最新スクレイプ状況")).toBeInTheDocument();
+    expect(screen.getByText("DB件数")).toBeInTheDocument();
+    expect(screen.getByText("2 件")).toBeInTheDocument();
+    expect(screen.getByText("キャッシュ")).toBeInTheDocument();
+    expect(screen.getByText("有効")).toBeInTheDocument();
+    expect(screen.getByText("TTL")).toBeInTheDocument();
+    expect(screen.getByText("3,600 秒")).toBeInTheDocument();
+    const statusPanel = screen.getByText("最新スクレイプ状況").closest("div.fixed.bottom-16.left-4");
+    expect(statusPanel).toHaveTextContent("最終更新");
+    expect(statusPanel).toHaveTextContent("2026/4/9");
   });
 
   it("opens delete modal and calls delete API", async () => {

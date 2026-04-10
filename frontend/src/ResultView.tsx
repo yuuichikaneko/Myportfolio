@@ -297,6 +297,18 @@ export function ResultView({ config, onBack }: ResultProps) {
         });
       }
     }
+    // 注意: この cpu_cooler は表示統一用のダミーであり、実在する保存部品データではない。
+    // API の値が null でも、UI上は同じセクション位置に説明を出せるようにしている。
+    if (!parts.some((part) => part.category === "cpu_cooler")) {
+      parts.push({
+        category: "cpu_cooler",
+        name: "未選択",
+        price: 0,
+        url: "",
+        specs: null,
+        isPlaceholder: true,
+      });
+    }
     return sortPartsByDisplayOrder(parts);
   }, [normalizedParts]);
 
@@ -517,6 +529,8 @@ export function ResultView({ config, onBack }: ResultProps) {
     : config.configuration_id;
 
   const normalizeUsageCode = (usage: string) => {
+    // 注意: App.tsx の normalizeUsageCode と同一ルールで維持すること。
+    // ここがずれると履歴側の用途分類と結果画面の表示用途が不一致になる。
     if (usage === "video_editing") {
       return "creator";
     }
@@ -543,6 +557,8 @@ export function ResultView({ config, onBack }: ResultProps) {
   const requestedBudget = !isSavedConfiguration(config)
     ? (config.requested_budget ?? config.budget)
     : config.budget;
+  const adjustedBudget = !isSavedConfiguration(config) ? config.budget : config.budget;
+  const hasBudgetCorrection = !isSavedConfiguration(config) && isAutoAdjusted && adjustedBudget !== requestedBudget;
   const buildPriorityCode: "cost" | "spec" | "balanced" = !isSavedConfiguration(config)
     ? (config.build_priority ?? "balanced")
     : "balanced";
@@ -578,6 +594,8 @@ export function ResultView({ config, onBack }: ResultProps) {
   const creatorCpuRecommendationText = usageCode === "creator"
     ? "ゲーム配信をするならRyzen 9 9950X3Dがおすすめです。"
     : "";
+  // 注意: CPUランキング表示モード切替は gaming 専用仕様。
+  // creator/ai/general に同ロジックを流用する場合は比較軸の再定義が必要。
   const gamingCpuRankingMode = isGamingUsage && !isSavedConfiguration(config) && config.build_priority === "cost" ? "cost" : "spec";
 
   const [gpuComparison, setGpuComparison] = useState<GpuPerformanceCompareResponse | null>(null);
@@ -825,6 +843,13 @@ export function ResultView({ config, onBack }: ResultProps) {
         : null,
   };
 
+  const hasCpuPart = normalizedParts.some((part) => part.category === "cpu");
+  const hasDedicatedCpuCooler = normalizedParts.some((part) => part.category === "cpu_cooler");
+  const showBundledCpuCoolerNote =
+    !isSavedConfiguration(config)
+    && hasCpuPart
+    && !hasDedicatedCpuCooler;
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-6">
       <div className="max-w-4xl mx-auto">
@@ -911,6 +936,11 @@ export function ResultView({ config, onBack }: ResultProps) {
           )}
 
           <div className="bg-blue-50 border-2 border-blue-300 rounded-lg p-6 mb-8">
+            {hasBudgetCorrection && (
+              <div className="mb-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-900">
+                予算補正: {formatCurrency(requestedBudget)} → {formatCurrency(adjustedBudget)}
+              </div>
+            )}
             <div className="flex justify-between items-center">
               <div>
                 <p className="text-gray-600">指定予算</p>
@@ -1142,6 +1172,19 @@ export function ResultView({ config, onBack }: ResultProps) {
               const psuCapacityWatts = part.category === "psu" ? parsePsuCapacityWatts(part.name) : null;
               const memoryCapacityGb = part.category === "memory" ? inferMemoryCapacityGb(part) : 0;
               const memoryModuleCount = part.category === "memory" ? inferMemoryModuleCount(part) : 0;
+              
+              // 付属CPUクーラーコメントをcpu_coolerセクションに表示
+              if (showBundledCpuCoolerNote && part.category === "cpu_cooler") {
+                return (
+                  <div key={index} className="rounded-lg border border-sky-300 bg-sky-50 px-4 py-3 text-sm text-sky-900">
+                    <p className="font-semibold">付属CPUクーラーを使用</p>
+                    <p className="mt-1 text-xs text-sky-800">
+                      CPUクーラーは未選択ですが、CPU付属クーラーを前提にしています。
+                    </p>
+                  </div>
+                );
+              }
+              
               return (
                 <div
                   key={index}

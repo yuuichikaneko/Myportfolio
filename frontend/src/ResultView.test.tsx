@@ -264,6 +264,7 @@ describe("ResultView", () => {
 
     expect(screen.getByText("相場変動により補正しました。")).toBeInTheDocument();
     expect(screen.getByText("相場データに基づき、ハイエンド予算を¥520,000へ補正しました。")).toBeInTheDocument();
+    expect(screen.getByText("予算補正: ￥574,980 → ￥520,000")).toBeInTheDocument();
   });
 
   it("shows creator budget tier and build priority labels", async () => {
@@ -350,5 +351,58 @@ describe("ResultView", () => {
     render(<ResultView config={config} onBack={() => {}} />);
 
     expect(screen.getByText("クリエイターPCではVRAM容量を優先し、同条件ならNVIDIAを優先します。NVIDIA対応アプリが多く、高解像度編集や重い3D素材向けの選定です。")).toBeInTheDocument();
+  });
+
+  it("shows bundled cpu cooler note when dedicated cooler is not selected", async () => {
+    const config: GenerateConfigResponse = {
+      usage: "general",
+      build_priority: "cost",
+      budget: 54980,
+      requested_budget: 54980,
+      configuration_id: 1091,
+      total_price: 52448,
+      estimated_power_w: 160,
+      parts: [
+        { category: "cpu", name: "AMD Ryzen 5 3400G BOX", price: 10500, url: "https://example.com/cpu" },
+        { category: "gpu", name: "内蔵GPU（統合グラフィックス）", price: 0, url: "https://example.com/cpu" },
+        { category: "motherboard", name: "ASRock A520M-HDV", price: 5680, url: "https://example.com/mb" },
+        { category: "memory", name: "CFD DDR4 8GB", price: 11660, url: "https://example.com/memory" },
+        { category: "os", name: "Windows 11 HOME", price: 16480, url: "https://example.com/os" },
+        { category: "psu", name: "400W PSU", price: 4580, url: "https://example.com/psu" },
+        { category: "case", name: "ZALMAN T3 PLUS", price: 3548, url: "https://example.com/case" },
+      ],
+    };
+
+    render(<ResultView config={config} onBack={() => {}} />);
+
+    expect(screen.getByText("付属CPUクーラーを使用")).toBeInTheDocument();
+    expect(screen.getByText("CPUクーラーは未選択ですが、CPU付属クーラーを前提にしています。")).toBeInTheDocument();
+  });
+
+  it("shows bundled cpu cooler note for ai builds as well", async () => {
+    const config: GenerateConfigResponse = {
+      usage: "ai",
+      build_priority: "spec",
+      budget: 533478,
+      requested_budget: 533478,
+      configuration_id: 1141,
+      total_price: 523748,
+      estimated_power_w: 526,
+      parts: [
+        { category: "cpu", name: "Intel Core Ultra 7 265K BOX", price: 47780, url: "https://example.com/cpu" },
+        { category: "gpu", name: "GeForce RTX 5080 16GB", price: 309800, url: "https://example.com/gpu" },
+        { category: "motherboard", name: "ASUS TUF GAMING B860M-PLUS WIFI", price: 25980, url: "https://example.com/mb" },
+        { category: "memory", name: "DDR5 48GB", price: 88000, url: "https://example.com/memory" },
+        { category: "storage", name: "NVMe 1TB", price: 19800, url: "https://example.com/storage" },
+        { category: "os", name: "Windows 11 HOME", price: 16480, url: "https://example.com/os" },
+        { category: "psu", name: "1000W PSU", price: 16580, url: "https://example.com/psu" },
+        { category: "case", name: "ZALMAN T3 PLUS", price: 3548, url: "https://example.com/case" },
+      ],
+    };
+
+    render(<ResultView config={config} onBack={() => {}} />);
+
+    expect(screen.getByText("付属CPUクーラーを使用")).toBeInTheDocument();
+    expect(screen.getByText("CPUクーラーは未選択ですが、CPU付属クーラーを前提にしています。")).toBeInTheDocument();
   });
 });
