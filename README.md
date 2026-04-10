@@ -48,6 +48,37 @@ f:/Python/Myportfolio/.venv/Scripts/python.exe manage.py showmigrations
 
 If `DB_ENGINE` is not set to `postgresql`, Django continues to use SQLite.
 
+#### PostgreSQL freeze mitigation and diagnostics
+Add or tune these variables in `django/.env` when using PostgreSQL:
+
+```bash
+DB_CONNECT_TIMEOUT=5
+DB_STATEMENT_TIMEOUT_MS=15000
+DB_LOCK_TIMEOUT_MS=5000
+DB_IDLE_IN_TX_TIMEOUT_MS=10000
+```
+
+Quick diagnostics from repo root:
+
+```bash
+f:/Python/Myportfolio/.venv/Scripts/python.exe postgres_pg_activity.py --action snapshot --env-path django/.env
+f:/Python/Myportfolio/.venv/Scripts/python.exe postgres_pg_activity.py --action blockers --env-path django/.env
+```
+
+PowerShell helper (uses psql):
+
+```powershell
+./postgres_pg_activity_tools.ps1 -Action snapshot -EnvPath .\django\.env
+./postgres_pg_activity_tools.ps1 -Action blockers -EnvPath .\django\.env
+```
+
+When a blocker PID is identified, use cancel first, then terminate only if needed:
+
+```bash
+f:/Python/Myportfolio/.venv/Scripts/python.exe postgres_pg_activity.py --action cancel --target-pid <PID> --env-path django/.env
+f:/Python/Myportfolio/.venv/Scripts/python.exe postgres_pg_activity.py --action terminate --target-pid <PID> --env-path django/.env
+```
+
 Windows helper scripts:
 - `start_django.bat`
 - `start_django.ps1`

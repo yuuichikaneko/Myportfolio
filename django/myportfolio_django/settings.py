@@ -88,11 +88,29 @@ DB_ENGINE = config('DB_ENGINE', default='sqlite3').strip().lower()
 if DB_ENGINE in ('postgresql', 'postgres', 'django.db.backends.postgresql'):
     db_sslmode = config('DB_SSLMODE', default='prefer').strip()
     db_client_encoding = config('DB_CLIENT_ENCODING', default='UTF8').strip()
+    db_connect_timeout = config('DB_CONNECT_TIMEOUT', default=5, cast=int)
+    db_statement_timeout_ms = config('DB_STATEMENT_TIMEOUT_MS', default=15000, cast=int)
+    db_lock_timeout_ms = config('DB_LOCK_TIMEOUT_MS', default=5000, cast=int)
+    db_idle_in_tx_timeout_ms = config('DB_IDLE_IN_TX_TIMEOUT_MS', default=10000, cast=int)
     db_options = {}
     if db_sslmode:
         db_options['sslmode'] = db_sslmode
     if db_client_encoding:
         db_options['client_encoding'] = db_client_encoding
+    # Prevent long blocking waits from feeling like app freeze.
+    if db_connect_timeout > 0:
+        db_options['connect_timeout'] = db_connect_timeout
+    pg_runtime_options = []
+    if db_statement_timeout_ms > 0:
+        pg_runtime_options.append(f'-c statement_timeout={db_statement_timeout_ms}')
+    if db_lock_timeout_ms > 0:
+        pg_runtime_options.append(f'-c lock_timeout={db_lock_timeout_ms}')
+    if db_idle_in_tx_timeout_ms > 0:
+        pg_runtime_options.append(
+            f'-c idle_in_transaction_session_timeout={db_idle_in_tx_timeout_ms}'
+        )
+    if pg_runtime_options:
+        db_options['options'] = ' '.join(pg_runtime_options)
 
     DATABASES = {
         'default': {
