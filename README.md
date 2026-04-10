@@ -28,6 +28,26 @@ python manage.py runserver 8001
 ```
 Runs on `http://localhost:8001`
 
+#### PostgreSQL migration preparation (Django)
+1. Install/update Django dependencies:
+```bash
+f:/Python/Myportfolio/.venv/Scripts/python.exe -m pip install -r django/django_requirements.txt
+```
+2. Create `django/.env` from `django/.env.postgresql.example` and set DB values.
+	- On Windows, keep `DB_CLIENT_ENCODING=UTF8` to avoid psycopg2 decode errors.
+3. Run migrations:
+```bash
+cd django
+f:/Python/Myportfolio/.venv/Scripts/python.exe manage.py migrate
+```
+4. Verify DB connection:
+```bash
+cd django
+f:/Python/Myportfolio/.venv/Scripts/python.exe manage.py showmigrations
+```
+
+If `DB_ENGINE` is not set to `postgresql`, Django continues to use SQLite.
+
 Windows helper scripts:
 - `start_django.bat`
 - `start_django.ps1`

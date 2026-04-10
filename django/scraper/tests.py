@@ -13,7 +13,7 @@ from .dospara_scraper import (
 	fetch_dospara_cpu_selection_material,
 )
 from .tasks import run_scraper_task
-from .views import ConfigurationViewSet, _cpu_meets_creator_minimum, _enforce_gaming_spec_best_value_gpu, _enforce_memory_speed_floor, _get_gpu_perf_score_from_snapshot, _infer_gaming_gpu_tier_label, _infer_memory_speed_mhz, _infer_storage_capacity_gb, _is_gaming_gpu_within_priority_cap, _is_part_suitable, _matches_selection_options, _pick_amd_gaming_cpu, _pick_creator_cpu_with_budget, _pick_gaming_cost_gpu_for_auto_adjust, _pick_part_by_target, _prefer_creator_premium_cpu, _prefer_creator_premium_gpu, _prefer_higher_gaming_cost_x3d_cpu, _rebalance_gaming_cost_cpu_to_storage, _recommend_min_budget_for_gaming_x3d_from_low_end_config, build_configuration_response
+from .views import ConfigurationViewSet, _creator_motherboard_expandability_score, _cpu_meets_creator_minimum, _enforce_gaming_spec_best_value_gpu, _enforce_memory_speed_floor, _get_cpu_perf_score, _get_gpu_perf_score_from_snapshot, _infer_gaming_gpu_tier_label, _infer_memory_speed_mhz, _infer_storage_capacity_gb, _is_gaming_gpu_within_priority_cap, _is_part_suitable, _matches_selection_options, _pick_amd_gaming_cpu, _pick_creator_cpu_with_budget, _pick_gaming_cost_gpu_for_auto_adjust, _pick_part_by_target, _prefer_creator_premium_cpu, _prefer_creator_premium_gpu, _prefer_higher_gaming_cost_x3d_cpu, _rebalance_gaming_cost_cpu_to_storage, _recommend_min_budget_for_gaming_x3d_from_low_end_config, _required_psu_wattage, build_configuration_response
 
 
 class ScraperApiTests(APITestCase):
@@ -6428,6 +6428,13 @@ class UsageConversionRegressionTests(APITestCase):
 			url='https://example.com/cpu-8600g-general-regression',
 		)
 		PCPart.objects.create(
+			part_type='cpu',
+			name='Intel Core Ultra 7 265K AI Regression',
+			price=47780,
+			specs={'socket': 'LGA1851', 'cores': 20, 'threads': 20},
+			url='https://example.com/cpu-ultra-265k-ai-regression',
+		)
+		PCPart.objects.create(
 			part_type='motherboard',
 			name='B650 DDR5 Board Regression',
 			price=19800,
@@ -6477,11 +6484,25 @@ class UsageConversionRegressionTests(APITestCase):
 			url='https://example.com/gpu-4070-12gb-regression',
 		)
 		PCPart.objects.create(
+			part_type='gpu',
+			name='NVIDIA GeForce RTX 5070 12GB Regression',
+			price=99800,
+			specs={'vram': '12GB', 'memory_gb': 12},
+			url='https://example.com/gpu-5070-12gb-regression',
+		)
+		PCPart.objects.create(
 			part_type='cpu_cooler',
 			name='Tower Air Cooler Regression',
 			price=5200,
 			specs={'supported_sockets': ['AM5']},
 			url='https://example.com/cooler-air-regression',
+		)
+		PCPart.objects.create(
+			part_type='psu',
+			name='400W PSU Regression',
+			price=4580,
+			specs={'wattage': 400},
+			url='https://example.com/psu-400-regression',
 		)
 		PCPart.objects.create(
 			part_type='psu',
@@ -6560,12 +6581,430 @@ class UsageConversionRegressionTests(APITestCase):
 		self.assertIn('1TB', creator_parts['storage']['name'])
 
 		self.assertGreater(ai_parts['gpu']['price'], 0)
-		self.assertIn('8GB', ai_parts['gpu']['name'])
+		self.assertRegex(ai_parts['gpu']['name'], r'\b(?:8|12|16)GB\b')
 		self.assertIn('32GB', ai_parts['memory']['name'])
 		self.assertIn('1TB', ai_parts['storage']['name'])
 
 		self.assertEqual(general_parts['gpu']['name'], '内蔵GPU（統合グラフィックス）')
 		self.assertEqual(general_parts['gpu']['price'], 0)
+
+	def test_required_psu_wattage_uses_400w_floor_for_general_igpu(self):
+		selected_parts = {
+			'cpu': PCPart.objects.get(name='AMD Ryzen 5 8600G General'),
+		}
+
+		required_w = _required_psu_wattage(selected_parts, 'general')
+
+		self.assertEqual(required_w, 400)
+
+	def test_pick_part_by_target_keeps_case_when_cost_target_band_is_empty(self):
+		PCPart.objects.filter(part_type='case').delete()
+		PCPart.objects.create(
+			part_type='case',
+			name='ATX Case Fallback Regression',
+			price=9800,
+			specs={'supported_form_factors': ['ATX']},
+			url='https://example.com/case-atx-fallback-regression',
+		)
+
+		case = _pick_part_by_target(
+			'case',
+			54980,
+			'general',
+			options={
+				'build_priority': 'cost',
+				'case_size': 'any',
+				'case_fan_policy': 'auto',
+			},
+		)
+
+		self.assertIsNotNone(case)
+		self.assertEqual(case.name, 'ATX Case Fallback Regression')
+
+	def test_generate_config_general_low_budget_keeps_os(self):
+		response = self._post_generate('general', budget=54980)
+
+		self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+		parts = {part['category']: part for part in response.data['parts']}
+		self.assertIn('os', parts)
+		self.assertTrue(parts['os']['name'])
+		self.assertLessEqual(response.data['total_price'], response.data['budget'])
+
+	def test_generate_config_general_low_budget_auto_adjusts_budget_when_os_required(self):
+		PCPart.objects.filter(part_type='os').delete()
+		PCPart.objects.create(
+			part_type='os',
+			name='Windows 11 Home High Price Regression',
+			price=70000,
+			specs={},
+			url='https://example.com/os-home-high-price-regression',
+		)
+
+		response = self._post_generate('general', budget=54980)
+
+		self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+		parts = {part['category']: part for part in response.data['parts']}
+		self.assertIn('os', parts)
+		self.assertTrue(response.data.get('budget_auto_adjusted'))
+		self.assertGreater(response.data.get('budget', 0), 54980)
+		self.assertIn('OS必須', response.data.get('message', ''))
+
+	def test_generate_config_general_spec_fallback_keeps_memory_at_16gb(self):
+		response = self.client.post(
+			'/api/generate-config/',
+			{'budget': 115478, 'usage': 'general', 'build_priority': 'spec', 'os_edition': 'home'},
+			format='json',
+		)
+
+		self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+		self.assertEqual(response.data.get('effective_build_priority'), 'cost')
+		parts = {part['category']: part for part in response.data['parts']}
+		self.assertIn('memory', parts)
+		self.assertEqual(int(parts['memory'].get('specs', {}).get('capacity_gb', 0)), 16)
+		self.assertNotIn('A520', parts['motherboard']['name'])
+
+	def test_generate_config_general_spec_keeps_cpu_and_motherboard_at_least_cost_level(self):
+		PCPart.objects.filter(part_type__in=['cpu', 'motherboard', 'memory', 'storage', 'cpu_cooler', 'psu', 'case', 'os']).delete()
+		PCPart.objects.create(
+			part_type='cpu',
+			name='AMD Ryzen 5 5500GT BOX Regression',
+			price=19760,
+			specs={'socket': 'AM4', 'cores': 6, 'threads': 12},
+			url='https://example.com/cpu-5500gt-regression',
+		)
+		PCPart.objects.create(
+			part_type='cpu',
+			name='AMD Ryzen 5 5600GT BOX Regression',
+			price=22120,
+			specs={'socket': 'AM4', 'cores': 6, 'threads': 12},
+			url='https://example.com/cpu-5600gt-regression',
+		)
+		PCPart.objects.create(
+			part_type='motherboard',
+			name='ASRock A520M-HDV Regression',
+			price=5680,
+			specs={'socket': 'AM4', 'memory_type': 'DDR4', 'form_factor': 'MicroATX'},
+			url='https://example.com/mb-a520-regression',
+		)
+		PCPart.objects.create(
+			part_type='motherboard',
+			name='GIGABYTE B550 GAMING X V2 Regression',
+			price=12370,
+			specs={'socket': 'AM4', 'memory_type': 'DDR4', 'form_factor': 'ATX'},
+			url='https://example.com/mb-b550-regression',
+		)
+		PCPart.objects.create(
+			part_type='memory',
+			name='DDR4 8GB Regression',
+			price=5680,
+			specs={'memory_type': 'DDR4', 'capacity_gb': 8},
+			url='https://example.com/memory-8gb-regression',
+		)
+		PCPart.objects.create(
+			part_type='memory',
+			name='DDR4 16GB Regression',
+			price=9680,
+			specs={'memory_type': 'DDR4', 'capacity_gb': 16},
+			url='https://example.com/memory-16gb-regression',
+		)
+		PCPart.objects.create(
+			part_type='storage',
+			name='NVMe 512GB Regression',
+			price=6800,
+			specs={'interface': 'NVMe', 'capacity_gb': 512},
+			url='https://example.com/storage-regression',
+		)
+		PCPart.objects.create(
+			part_type='cpu_cooler',
+			name='AM4 Air Cooler Regression',
+			price=3540,
+			specs={'supported_sockets': ['AM4']},
+			url='https://example.com/cooler-regression',
+		)
+		PCPart.objects.create(
+			part_type='psu',
+			name='400W PSU Regression',
+			price=4580,
+			specs={'wattage': 400},
+			url='https://example.com/psu-regression',
+		)
+		PCPart.objects.create(
+			part_type='case',
+			name='MicroATX Case Regression',
+			price=3548,
+			specs={'supported_form_factors': ['MicroATX']},
+			url='https://example.com/case-regression',
+		)
+		PCPart.objects.create(
+			part_type='os',
+			name='Windows 11 Home Regression',
+			price=16480,
+			specs={},
+			url='https://example.com/os-regression',
+		)
+
+		cost_response = self.client.post(
+			'/api/generate-config/',
+			{'budget': 115478, 'usage': 'general', 'build_priority': 'cost', 'os_edition': 'home'},
+			format='json',
+		)
+		spec_response = self.client.post(
+			'/api/generate-config/',
+			{'budget': 115478, 'usage': 'general', 'build_priority': 'spec', 'os_edition': 'home'},
+			format='json',
+		)
+
+		self.assertEqual(cost_response.status_code, status.HTTP_200_OK, cost_response.data)
+		self.assertEqual(spec_response.status_code, status.HTTP_200_OK, spec_response.data)
+
+		cost_parts = {part['category']: part for part in cost_response.data['parts']}
+		spec_parts = {part['category']: part for part in spec_response.data['parts']}
+
+		cost_cpu = PCPart.objects.get(name=cost_parts['cpu']['name'])
+		spec_cpu = PCPart.objects.get(name=spec_parts['cpu']['name'])
+		self.assertGreaterEqual(_get_cpu_perf_score(spec_cpu) or 0, _get_cpu_perf_score(cost_cpu) or 0)
+
+		cost_mb = PCPart.objects.get(name=cost_parts['motherboard']['name'])
+		spec_mb = PCPart.objects.get(name=spec_parts['motherboard']['name'])
+		self.assertGreaterEqual(
+			_creator_motherboard_expandability_score(spec_mb),
+			_creator_motherboard_expandability_score(cost_mb),
+		)
+		self.assertEqual(int(spec_parts['memory'].get('specs', {}).get('capacity_gb', 0)), 16)
+
+	def test_generate_config_general_spec_prefers_higher_price_cpu_cooler_than_cost(self):
+		PCPart.objects.filter(part_type='cpu_cooler').delete()
+		PCPart.objects.create(
+			part_type='cpu_cooler',
+			name='Budget Air Cooler Regression',
+			price=2980,
+			specs={'supported_sockets': ['AM5']},
+			url='https://example.com/cooler-budget-regression',
+		)
+		PCPart.objects.create(
+			part_type='cpu_cooler',
+			name='Premium Air Cooler Regression',
+			price=3980,
+			specs={'supported_sockets': ['AM5']},
+			url='https://example.com/cooler-premium-regression',
+		)
+
+		cost_response = self.client.post(
+			'/api/generate-config/',
+			{'budget': 115478, 'usage': 'general', 'build_priority': 'cost', 'os_edition': 'home'},
+			format='json',
+		)
+		spec_response = self.client.post(
+			'/api/generate-config/',
+			{'budget': 115478, 'usage': 'general', 'build_priority': 'spec', 'os_edition': 'home'},
+			format='json',
+		)
+
+		self.assertEqual(cost_response.status_code, status.HTTP_200_OK, cost_response.data)
+		self.assertEqual(spec_response.status_code, status.HTTP_200_OK, spec_response.data)
+
+		cost_parts = {part['category']: part for part in cost_response.data['parts']}
+		spec_parts = {part['category']: part for part in spec_response.data['parts']}
+		self.assertLessEqual(int(cost_parts['cpu_cooler']['price']), int(spec_parts['cpu_cooler']['price']))
+
+	def test_generate_config_general_returns_explicit_error_when_no_os_candidate(self):
+		PCPart.objects.filter(part_type='os').delete()
+
+		response = self._post_generate('general', budget=54980)
+
+		self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+		self.assertIn('OS必須予算不足', str(response.data.get('detail', '')))
+
+	def test_ai_latest_generation_cpu_filter(self):
+		latest_cpu = PCPart(
+			part_type='cpu',
+			name='Intel Core Ultra 7 265K BOX',
+			price=47780,
+			specs={'socket': 'LGA1851', 'cores': 20, 'threads': 20},
+			url='https://example.com/cpu-intel-ultra-265k',
+		)
+		latest_amd_cpu = PCPart(
+			part_type='cpu',
+			name='AMD Ryzen 7 9700X BOX',
+			price=49800,
+			specs={'socket': 'AM5', 'cores': 8, 'threads': 16},
+			url='https://example.com/cpu-ryzen-9700x',
+		)
+		previous_amd_cpu = PCPart(
+			part_type='cpu',
+			name='AMD Ryzen 5 8500G BOX',
+			price=29800,
+			specs={'socket': 'AM5', 'cores': 6, 'threads': 12},
+			url='https://example.com/cpu-ryzen-8500g',
+		)
+		legacy_cpu = PCPart(
+			part_type='cpu',
+			name='Intel Core i5-12400F BOX',
+			price=22800,
+			specs={'socket': 'LGA1700', 'cores': 6, 'threads': 12},
+			url='https://example.com/cpu-intel-12400f',
+		)
+
+		self.assertTrue(_matches_selection_options('cpu', latest_cpu, options={'usage': 'ai', 'cpu_vendor': 'any'}))
+		self.assertTrue(_matches_selection_options('cpu', latest_amd_cpu, options={'usage': 'ai', 'cpu_vendor': 'any'}))
+		self.assertFalse(_matches_selection_options('cpu', previous_amd_cpu, options={'usage': 'ai', 'cpu_vendor': 'any'}))
+		self.assertFalse(_matches_selection_options('cpu', legacy_cpu, options={'usage': 'ai', 'cpu_vendor': 'any'}))
+
+	def test_ai_latest_generation_gpu_filter(self):
+		latest_gpu = PCPart(
+			part_type='gpu',
+			name='NVIDIA GeForce RTX 5070 12GB',
+			price=99800,
+			specs={'memory_gb': 12},
+			url='https://example.com/gpu-rtx5070',
+		)
+		legacy_gpu = PCPart(
+			part_type='gpu',
+			name='NVIDIA GeForce RTX 4070 12GB',
+			price=69800,
+			specs={'memory_gb': 12},
+			url='https://example.com/gpu-rtx4070',
+		)
+
+		self.assertTrue(_matches_selection_options('gpu', latest_gpu, options={'usage': 'ai', 'build_priority': 'spec', 'budget': 300000}))
+		self.assertFalse(_matches_selection_options('gpu', legacy_gpu, options={'usage': 'ai', 'build_priority': 'spec', 'budget': 300000}))
+
+	def test_ai_cpu_selection_prefers_performance_for_spec_and_efficiency_for_cost(self):
+		PCPart.objects.filter(part_type='cpu').delete()
+
+		cpu_high_perf = PCPart.objects.create(
+			part_type='cpu',
+			name='Intel Core Ultra 9 285K BOX AI Test',
+			price=47000,
+			specs={'socket': 'LGA1851', 'cpu_perf_score': 15000},
+			url='https://example.com/cpu-ai-285k',
+		)
+		cpu_value = PCPart.objects.create(
+			part_type='cpu',
+			name='Intel Core Ultra 7 265K BOX AI Test',
+			price=30000,
+			specs={'socket': 'LGA1851', 'cpu_perf_score': 10000},
+			url='https://example.com/cpu-ai-265k',
+		)
+		cpu_cheap = PCPart.objects.create(
+			part_type='cpu',
+			name='Intel Core Ultra 5 245K BOX AI Test',
+			price=25000,
+			specs={'socket': 'LGA1851', 'cpu_perf_score': 4000},
+			url='https://example.com/cpu-ai-245k',
+		)
+
+		spec_pick = _pick_part_by_target(
+			'cpu',
+			budget=300000,
+			usage='ai',
+			options={
+				'build_priority': 'spec',
+				'cpu_vendor': 'any',
+			},
+		)
+		cost_pick = _pick_part_by_target(
+			'cpu',
+			budget=300000,
+			usage='ai',
+			options={
+				'build_priority': 'cost',
+				'cpu_vendor': 'any',
+			},
+		)
+
+		self.assertIsNotNone(spec_pick)
+		self.assertIsNotNone(cost_pick)
+		self.assertEqual(spec_pick.id, cpu_high_perf.id)
+		self.assertEqual(cost_pick.id, cpu_value.id)
+		self.assertNotEqual(cost_pick.id, cpu_cheap.id)
+
+	def test_ai_cpu_selection_cost_premium_prefers_top_tier_cpu(self):
+		PCPart.objects.filter(part_type='cpu').delete()
+
+		cpu_value_low = PCPart.objects.create(
+			part_type='cpu',
+			name='Intel Core Ultra 5 245KF BOX AI Floor Test',
+			price=32780,
+			specs={'socket': 'LGA1851', 'cpu_perf_score': 8657},
+			url='https://example.com/cpu-ai-245kf-floor',
+		)
+		cpu_value_mid = PCPart.objects.create(
+			part_type='cpu',
+			name='Intel Core Ultra 7 265F BOX AI Floor Test',
+			price=52380,
+			specs={'socket': 'LGA1851', 'cpu_perf_score': 9979},
+			url='https://example.com/cpu-ai-265f-floor',
+		)
+		cpu_top = PCPart.objects.create(
+			part_type='cpu',
+			name='Intel Core Ultra 9 285K BOX AI Floor Test',
+			price=79800,
+			specs={'socket': 'LGA1851', 'cpu_perf_score': 13474},
+			url='https://example.com/cpu-ai-285k-floor',
+		)
+
+		cost_pick = _pick_part_by_target(
+			'cpu',
+			budget=734980,
+			usage='ai',
+			options={
+				'build_priority': 'cost',
+				'cpu_vendor': 'any',
+			},
+		)
+
+		self.assertIsNotNone(cost_pick)
+		self.assertEqual(cost_pick.id, cpu_top.id)
+		self.assertNotEqual(cost_pick.id, cpu_value_mid.id)
+		self.assertNotEqual(cost_pick.id, cpu_value_low.id)
+
+	def test_ai_gpu_selection_premium_fixed_by_build_priority(self):
+		PCPart.objects.filter(part_type='gpu').delete()
+
+		gpu_r9700 = PCPart.objects.create(
+			part_type='gpu',
+			name='ASRock Radeon AI PRO R9700 Creator 32GB (R9700 CT 32G)',
+			price=259800,
+			specs={'memory_gb': 32},
+			url='https://example.com/gpu-r9700-ai-fixed',
+		)
+		gpu_pro4500 = PCPart.objects.create(
+			part_type='gpu',
+			name='NVIDIA RTX PRO 4500 Blackwell BOX (RTX PRO 4500 32GB)',
+			price=506000,
+			specs={'memory_gb': 32},
+			url='https://example.com/gpu-rtxpro4500-ai-fixed',
+		)
+		PCPart.objects.create(
+			part_type='gpu',
+			name='GIGABYTE GeForce RTX 5080 16GB',
+			price=309800,
+			specs={'memory_gb': 16},
+			url='https://example.com/gpu-rtx5080-ai-fixed',
+		)
+
+		cost_pick = _pick_part_by_target(
+			'gpu',
+			budget=734980,
+			usage='ai',
+			options={
+				'build_priority': 'cost',
+			},
+		)
+		spec_pick = _pick_part_by_target(
+			'gpu',
+			budget=734980,
+			usage='ai',
+			options={
+				'build_priority': 'spec',
+			},
+		)
+
+		self.assertIsNotNone(cost_pick)
+		self.assertIsNotNone(spec_pick)
+		self.assertEqual(cost_pick.id, gpu_r9700.id)
+		self.assertEqual(spec_pick.id, gpu_pro4500.id)
 
 
 class DosparaScraperTests(APITestCase):
