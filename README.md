@@ -63,13 +63,34 @@ Quick diagnostics from repo root:
 ```bash
 f:/Python/Myportfolio/.venv/Scripts/python.exe postgres_pg_activity.py --action snapshot --env-path django/.env
 f:/Python/Myportfolio/.venv/Scripts/python.exe postgres_pg_activity.py --action blockers --env-path django/.env
+f:/Python/Myportfolio/.venv/Scripts/python.exe postgres_pg_activity.py --action locks --env-path django/.env
 ```
+
+Timeout-guarded migration (recommended to avoid long VS Code hangs):
+
+```powershell
+./safe_postgres_migrate.ps1 -TimeoutSec 300 -EnvPath django/.env
+```
+
+One-shot auto-unfreeze mode (timeout -> detect idle blockers -> terminate -> retry once):
+
+```powershell
+./safe_postgres_migrate.ps1 -TimeoutSec 180 -AutoTerminateIdleBlockers -MinIdleTxSec 30 -RetryTimeoutSec 180 -EnvPath django/.env
+```
+
+Or run it from VS Code task: `PostgreSQL Safe Migrate`.
 
 PowerShell helper (uses psql):
 
 ```powershell
 ./postgres_pg_activity_tools.ps1 -Action snapshot -EnvPath .\django\.env
 ./postgres_pg_activity_tools.ps1 -Action blockers -EnvPath .\django\.env
+```
+
+Continuous freeze watcher (captures blockers/locks/snapshot repeatedly to a log file):
+
+```powershell
+./postgres_freeze_watch.ps1 -EnvPath django/.env -DurationSec 300 -IntervalSec 2
 ```
 
 When a blocker PID is identified, use cancel first, then terminate only if needed:

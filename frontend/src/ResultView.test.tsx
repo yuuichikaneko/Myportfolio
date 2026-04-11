@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { GenerateConfigResponse, SavedConfigurationResponse } from "./api";
 import { ResultView } from "./ResultView";
@@ -106,6 +106,62 @@ vi.mock("./api", async () => {
         { vendor: "amd", model_name: "Ryzen 5 9600X", perf_score: 3163, price: 35280, value_score: 0.089654, source_url: "https://example.com/amd5" },
       ],
     })),
+    getSavedConfigurationById: vi.fn(async () => ({
+      id: 999,
+      budget: 220000,
+      usage: "gaming",
+      usage_display: "ゲーミングPC",
+      total_price: 180000,
+      cpu_data: null,
+      cpu_cooler_data: null,
+      gpu_data: null,
+      motherboard_data: null,
+      memory_data: null,
+      storage_data: null,
+      storage2_data: null,
+      storage3_data: null,
+      os_data: null,
+      psu_data: null,
+      case_data: null,
+      created_at: "2026-04-05T12:00:00Z",
+    })),
+    createSavedConfiguration: vi.fn(async () => ({
+      id: 1202,
+      budget: 220000,
+      usage: "gaming",
+      usage_display: "ゲーミングPC",
+      total_price: 189000,
+      cpu_data: null,
+      cpu_cooler_data: null,
+      gpu_data: null,
+      motherboard_data: null,
+      memory_data: null,
+      storage_data: null,
+      storage2_data: null,
+      storage3_data: null,
+      os_data: null,
+      psu_data: null,
+      case_data: null,
+      created_at: "2026-04-05T12:00:00Z",
+    })),
+    getPartsByType: vi.fn(async (partType: string) => {
+      if (partType === "cpu") {
+        return [
+          {
+            id: 101,
+            part_type: "cpu",
+            part_type_display: "CPU",
+            name: "AMD Ryzen 7 9700X BOX",
+            price: 49800,
+            specs: { socket: "AM5", memory_type: "DDR5" },
+            url: "https://example.com/cpu9700x",
+            scraped_at: "2026-04-05T12:00:00Z",
+            updated_at: "2026-04-05T12:00:00Z",
+          },
+        ];
+      }
+      return [];
+    }),
   };
 });
 
@@ -250,7 +306,7 @@ describe("ResultView", () => {
       requested_budget: 574980,
       budget_auto_adjusted: true,
       market_budget_adjusted: true,
-      market_budget_note: "相場データに基づき、ハイエンド予算を¥520,000へ補正しました。",
+      market_budget_note: "予算を補正しました。相場データ（high帯）に基づき、予算を¥520,000へ補正しました。",
       configuration_id: 3,
       total_price: 498000,
       estimated_power_w: 560,
@@ -262,9 +318,74 @@ describe("ResultView", () => {
 
     render(<ResultView config={config} onBack={() => {}} />);
 
-    expect(screen.getByText("相場変動により補正しました。")).toBeInTheDocument();
-    expect(screen.getByText("相場データに基づき、ハイエンド予算を¥520,000へ補正しました。")).toBeInTheDocument();
+    expect(screen.getByText("予算を補正しました")).toBeInTheDocument();
+    expect(screen.queryByText("構成を自動調整しました")).not.toBeInTheDocument();
+    expect(screen.getByText("相場変動により予算を補正しました。")).toBeInTheDocument();
+    expect(screen.getByText("予算を補正しました。相場データ（high帯）に基づき、予算を¥520,000へ補正しました。")).toBeInTheDocument();
+    expect(screen.getByText("引き下げ補正")).toBeInTheDocument();
     expect(screen.getByText("予算補正: ￥574,980 → ￥520,000")).toBeInTheDocument();
+  });
+
+  it("shows raise-direction label when budget correction increases budget", async () => {
+    const config: GenerateConfigResponse = {
+      usage: "gaming",
+      build_priority: "cost",
+      budget: 180000,
+      requested_budget: 120000,
+      budget_auto_adjusted: true,
+      market_budget_adjusted: true,
+      market_budget_note: "予算を補正しました。相場データ（low帯）に基づき、予算を¥180,000へ引き上げました。",
+      configuration_id: 11,
+      total_price: 168000,
+      estimated_power_w: 320,
+      parts: [
+        { category: "cpu", name: "Ryzen 5 7600", price: 32000, url: "https://example.com/cpu" },
+        { category: "gpu", name: "RTX 4060", price: 45000, url: "https://example.com/gpu" },
+      ],
+    };
+
+    render(<ResultView config={config} onBack={() => {}} />);
+
+    expect(screen.getByText("引き上げ補正")).toBeInTheDocument();
+    expect(screen.getByText("予算補正: ￥120,000 → ￥180,000")).toBeInTheDocument();
+  });
+
+  it("shows configuration auto-adjustment separately from budget correction", async () => {
+    const config: GenerateConfigResponse = {
+      usage: "gaming",
+      build_priority: "spec",
+      budget: 186978,
+      requested_budget: 186978,
+      budget_auto_adjusted: true,
+      market_budget_adjusted: false,
+      part_adjustments: [
+        {
+          category: "cpu",
+          category_label: "CPU",
+          from_name: "AMD Ryzen 7 5700X3D BOX",
+          from_price: 35800,
+          to_name: "AMD Ryzen 7 7800X3D BOX",
+          to_price: 48000,
+          reason: "用途・予算帯・方針に合わせてCPUを再選定しました。",
+        },
+      ],
+      configuration_id: 10,
+      total_price: 174016,
+      estimated_power_w: 244,
+      parts: [
+        { category: "cpu", name: "AMD Ryzen 7 7800X3D BOX", price: 48000, url: "https://example.com/cpu" },
+        { category: "gpu", name: "Palit NE63050018JE-1072F (GeForce RTX 3050 StormX 6GB)", price: 29800, url: "https://example.com/gpu" },
+      ],
+    };
+
+    render(<ResultView config={config} onBack={() => {}} />);
+
+    expect(screen.getByText("構成を自動調整しました")).toBeInTheDocument();
+    expect(screen.queryByText("予算を補正しました")).not.toBeInTheDocument();
+    expect(screen.getByText("構成パーツと選定条件を自動調整しました。")).toBeInTheDocument();
+    expect(screen.getByText("構成変更の内訳")).toBeInTheDocument();
+    expect(screen.getByText("CPU: AMD Ryzen 7 5700X3D BOX → AMD Ryzen 7 7800X3D BOX")).toBeInTheDocument();
+    expect(screen.getByText("理由: 用途・予算帯・方針に合わせてCPUを再選定しました。")).toBeInTheDocument();
   });
 
   it("shows creator budget tier and build priority labels", async () => {
@@ -404,5 +525,44 @@ describe("ResultView", () => {
 
     expect(screen.getByText("付属CPUクーラーを使用")).toBeInTheDocument();
     expect(screen.getByText("CPUクーラーは未選択ですが、CPU付属クーラーを前提にしています。")).toBeInTheDocument();
+  });
+
+  it("allows manual part replacement from result screen", async () => {
+    const config: GenerateConfigResponse = {
+      usage: "gaming",
+      build_priority: "cost",
+      budget: 220000,
+      requested_budget: 220000,
+      configuration_id: 1201,
+      total_price: 180000,
+      estimated_power_w: 430,
+      parts: [
+        { category: "cpu", name: "AMD Ryzen 5 7600 BOX", price: 32000, url: "https://example.com/cpu7600" },
+        { category: "motherboard", name: "B650M BOARD", price: 18000, url: "https://example.com/b650", specs: { socket: "AM5", memory_type: "DDR4" } },
+        { category: "memory", name: "DDR4 32GB", price: 12000, url: "https://example.com/ddr4", specs: { memory_type: "DDR4" } },
+        { category: "gpu", name: "RTX 4060", price: 45000, url: "https://example.com/gpu4060" },
+      ],
+    };
+
+    render(<ResultView config={config} onBack={() => {}} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "CPUを変更" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("表示件数: 1（非互換はグレー表示）")).toBeInTheDocument();
+      expect(screen.getByText("AMD Ryzen 7 9700X BOX")).toBeInTheDocument();
+    });
+
+    expect(screen.getByText("警告: CPUの対応メモリ規格が現在のマザーボードと一致しません。 CPUの対応メモリ規格が現在のメモリと一致しません。")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /AMD Ryzen 7 9700X BOX/ }));
+
+    expect(screen.getByText("非互換候補を選択しますか？")).toBeInTheDocument();
+    expect(screen.getByText("この候補を選択")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "この候補を選択" }));
+
+    expect(screen.getByText("手動で構成を変更中です。")).toBeInTheDocument();
+    expect(screen.getByText("AMD Ryzen 7 9700X BOX")).toBeInTheDocument();
   });
 });
