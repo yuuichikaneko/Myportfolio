@@ -82,6 +82,16 @@ export interface PartResponse {
   specs?: Record<string, unknown> | null;
 }
 
+export interface PartAdjustmentResponse {
+  category: string;
+  category_label?: string;
+  from_name: string;
+  from_price: number;
+  to_name: string;
+  to_price: number;
+  reason: string;
+}
+
 /**
  * 構成生成APIのレスポンス形式。
  * 選択した用途コード、合計金額、構成パーツ一覧を返す。
@@ -101,6 +111,7 @@ export interface GenerateConfigResponse {
   selected_gpu_perf_score?: number;
   selected_gpu_gaming_tier_label?: string;
   message?: string;
+  part_adjustments?: PartAdjustmentResponse[];
   cooler_type?: "air" | "liquid" | "any";
   radiator_size?: "120" | "240" | "360" | "any";
   cooling_profile?: "silent" | "performance" | "balanced";
@@ -149,6 +160,22 @@ export interface SavedConfigurationResponse {
   psu_data: SavedPartResponse | null;
   case_data: SavedPartResponse | null;
   created_at: string;
+}
+
+export interface CreateSavedConfigurationRequest {
+  budget: number;
+  usage: "gaming" | "video_editing" | "general";
+  cpu: number | null;
+  cpu_cooler: number | null;
+  gpu: number | null;
+  motherboard: number | null;
+  memory: number | null;
+  storage: number | null;
+  storage2: number | null;
+  storage3: number | null;
+  os: number | null;
+  psu: number | null;
+  case: number | null;
 }
 
 interface PaginatedResponse<T> {
@@ -256,6 +283,34 @@ export async function getSavedConfigurations(): Promise<SavedConfigurationRespon
   return data.results;
 }
 
+export async function getSavedConfigurationById(id: number): Promise<SavedConfigurationResponse> {
+  const response = await safeFetch(`${API_BASE_URL}/configurations/${id}/`);
+
+  if (!response.ok) {
+    throw await parseApiError(response, "Failed to get saved configuration");
+  }
+
+  return response.json();
+}
+
+export async function createSavedConfiguration(
+  request: CreateSavedConfigurationRequest
+): Promise<SavedConfigurationResponse> {
+  const response = await safeFetch(`${API_BASE_URL}/configurations/`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(request),
+  });
+
+  if (!response.ok) {
+    throw await parseApiError(response, "Failed to create saved configuration");
+  }
+
+  return response.json();
+}
+
 export async function deleteSavedConfiguration(id: number): Promise<void> {
   const response = await safeFetch(`${API_BASE_URL}/configurations/${id}/`, {
     method: "DELETE",
@@ -264,6 +319,16 @@ export async function deleteSavedConfiguration(id: number): Promise<void> {
   if (!response.ok) {
     throw await parseApiError(response, "Failed to delete saved configuration");
   }
+}
+
+export async function getPartsByType(partType: string): Promise<SavedPartResponse[]> {
+  const response = await safeFetch(`${API_BASE_URL}/parts/by_type/?type=${encodeURIComponent(partType)}`);
+
+  if (!response.ok) {
+    throw await parseApiError(response, "Failed to get parts by type");
+  }
+
+  return response.json();
 }
 
 export interface PartPriceRange {

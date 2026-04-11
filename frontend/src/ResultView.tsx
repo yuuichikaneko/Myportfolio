@@ -1,10 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  createSavedConfiguration,
   compareCpuSelectionMaterial,
   compareGpuPerformance,
   CpuSelectionEntryResponse,
   CpuSelectionMaterialCompareResponse,
   CpuSelectionMaterialLatestResponse,
+  getSavedConfigurationById,
+  getPartsByType,
   getLatestGpuPerformance,
   getLatestCpuSelectionMaterial,
   GenerateConfigResponse,
@@ -14,19 +17,34 @@ import {
   SavedConfigurationResponse,
   SavedPartResponse,
 } from "./api";
+import { normalizeUsageCode } from "./usageUtils";
 
 interface ResultProps {
   config: GenerateConfigResponse | SavedConfigurationResponse;
   onBack: () => void;
+  onSavedConfiguration?: (saved: SavedConfigurationResponse) => void;
 }
 
 interface NormalizedResultPart {
   category: string;
+  partType?: string;
+  partId?: number | null;
   name: string;
   price: number;
   url: string;
   specs: Record<string, unknown> | null;
   isPlaceholder?: boolean;
+}
+
+interface CompatibilityCheckResult {
+  ok: boolean;
+  reasons: string[];
+}
+
+interface PendingIncompatibleSelection {
+  category: string;
+  candidate: SavedPartResponse;
+  reasons: string[];
 }
 
 const PART_DISPLAY_ORDER = [
@@ -42,6 +60,9 @@ const PART_DISPLAY_ORDER = [
   "psu",
   "case",
 ] as const;
+
+const EDITABLE_PART_CATEGORIES = new Set(PART_DISPLAY_ORDER);
+const CANDIDATE_COLLAPSE_LIMIT = 12;
 
 const STORAGE_MEDIA_LABELS: Record<"ssd" | "hdd" | "other", string> = {
   ssd: "SSD",
@@ -199,17 +220,255 @@ function sortGamingCpuEntries(entries: CpuSelectionEntryResponse[], mode: "cost"
   return sortedEntries.slice(0, RANKING_DISPLAY_LIMIT);
 }
 
-export function ResultView({ config, onBack }: ResultProps) {
+function normalizeSpecText(value: unknown): string {
+  if (typeof value !== "string") {
+    return "";
+  }
+  return value.replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function inferManufacturerName(part: { name: string; specs?: Record<string, unknown> | null }): string {
+  const makerFromSpecs = part.specs?.maker ?? part.specs?.manufacturer;
+  if (typeof makerFromSpecs === "string" && makerFromSpecs.trim()) {
+    return makerFromSpecs.trim();
+  }
+  const firstToken = part.name.trim().split(/\s+/)[0];
+  return firstToken ?? "不明";
+}
+
+function parseNumberLike(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const match = value.replace(/,/g, "").match(/(\d+(?:\.\d+)?)/);
+    if (match) {
+      return Number(match[1]);
+    }
+  }
+  return null;
+}
+
+function normalizeFormFactorToken(value: string): string {
+  const text = value.toLowerCase().replace(/\s+/g, "").replace(/_/g, "-");
+  if (text.includes("eatx") || text.includes("e-atx") || text.includes("extendedatx")) {
+    return "eatx";
+  }
+  if (text.includes("mini-itx") || text.includes("miniitx") || text.includes("itx")) {
+    return "mini-itx";
+  }
+  if (text.includes("micro-atx") || text.includes("microatx") || text.includes("matx") || text.includes("m-atx")) {
+    return "micro-atx";
+  }
+  if (text.includes("atx")) {
+    return "atx";
+  }
+  if (text.includes("sfx-l") || text.includes("sfxl")) {
+    return "sfx-l";
+  }
+  if (text.includes("sfx")) {
+    return "sfx";
+  }
+  return text;
+}
+
+function getPartFormFactor(part: { name: string; specs?: Record<string, unknown> | null }): string {
+  const fromSpecs = part.specs?.form_factor;
+  if (typeof fromSpecs === "string" && fromSpecs.trim()) {
+    return normalizeFormFactorToken(fromSpecs);
+  }
+  return normalizeFormFactorToken(part.name);
+}
+
+function getCaseMaxCoolerHeightMm(part: { name: string; specs?: Record<string, unknown> | null }): number | null {
+  const keys = [
+    "max_cpu_cooler_height_mm",
+    "cpu_cooler_clearance_mm",
+    "max_cooler_height_mm",
+    "cooler_height_limit_mm",
+  ];
+  for (const key of keys) {
+    const parsed = parseNumberLike(part.specs?.[key]);
+    if (parsed && parsed > 0) {
+      return parsed;
+    }
+  }
+  const match = part.name.match(/(?:クーラー高|cooler\s*height|max\s*cooler)\D{0,8}(\d{2,3})\s*mm/i);
+  if (match) {
+    return Number(match[1]);
+  }
+  return null;
+}
+
+function getCpuCoolerHeightMm(part: { name: string; specs?: Record<string, unknown> | null }): number | null {
+  const keys = ["height_mm", "cooler_height_mm", "product_height_mm", "height"];
+  for (const key of keys) {
+    const parsed = parseNumberLike(part.specs?.[key]);
+    if (parsed && parsed > 0) {
+      return parsed;
+    }
+  }
+  const match = part.name.match(/(\d{2,3})\s*mm/i);
+  if (match) {
+    return Number(match[1]);
+  }
+  return null;
+}
+
+function getPsuWattage(part: { name: string; specs?: Record<string, unknown> | null }): number | null {
+  const fromSpecs = parseNumberLike(part.specs?.wattage ?? part.specs?.power_w);
+  if (fromSpecs && fromSpecs > 0) {
+    return fromSpecs;
+  }
+  const match = part.name.match(/(\d{3,4})\s*w/i);
+  if (match) {
+    return Number(match[1]);
+  }
+  return null;
+}
+
+function getCaseSupportedMotherboardFormFactors(part: { specs?: Record<string, unknown> | null }): string[] {
+  const keys = ["supported_mb_form_factors", "supported_form_factors", "mb_form_factors"];
+  for (const key of keys) {
+    const value = part.specs?.[key];
+    if (Array.isArray(value)) {
+      return value
+        .map((item) => normalizeFormFactorToken(String(item)))
+        .filter(Boolean);
+    }
+    if (typeof value === "string" && value.trim()) {
+      return value
+        .split(/[,/|\s]+/)
+        .map((item) => normalizeFormFactorToken(item))
+        .filter(Boolean);
+    }
+  }
+  return [];
+}
+
+function isCaseCompatibleWithMotherboard(casePart: { name: string; specs?: Record<string, unknown> | null }, motherboardPart: { name: string; specs?: Record<string, unknown> | null } | null): boolean {
+  if (!motherboardPart) {
+    return true;
+  }
+  const mbFormFactor = getPartFormFactor(motherboardPart);
+  if (!mbFormFactor) {
+    return true;
+  }
+  const explicitSupported = getCaseSupportedMotherboardFormFactors(casePart);
+  if (explicitSupported.length > 0) {
+    return explicitSupported.includes(mbFormFactor);
+  }
+  const rank: Record<string, number> = {
+    "mini-itx": 1,
+    "micro-atx": 2,
+    atx: 3,
+    eatx: 4,
+  };
+  const caseRank = rank[getPartFormFactor(casePart)];
+  const mbRank = rank[mbFormFactor];
+  if (!caseRank || !mbRank) {
+    return true;
+  }
+  return caseRank >= mbRank;
+}
+
+function checkPartCompatibility(
+  category: string,
+  candidate: SavedPartResponse,
+  selectedParts: NormalizedResultPart[],
+  requiredPsuWatt: number
+): CompatibilityCheckResult {
+  const reasons: string[] = [];
+  const candidateSocket = normalizeSpecText(candidate.specs?.socket);
+  const candidateMemoryType = normalizeSpecText(candidate.specs?.memory_type);
+
+  const currentCpu = selectedParts.find((part) => part.category === "cpu" && !part.isPlaceholder) ?? null;
+  const currentMotherboard = selectedParts.find((part) => part.category === "motherboard" && !part.isPlaceholder) ?? null;
+  const currentMemory = selectedParts.find((part) => part.category === "memory" && !part.isPlaceholder) ?? null;
+  const currentCase = selectedParts.find((part) => part.category === "case" && !part.isPlaceholder) ?? null;
+  const currentCpuCooler = selectedParts.find((part) => part.category === "cpu_cooler" && !part.isPlaceholder) ?? null;
+
+  const currentCpuSocket = normalizeSpecText(currentCpu?.specs?.socket);
+  const currentCpuMemoryType = normalizeSpecText(currentCpu?.specs?.memory_type);
+  const currentMbSocket = normalizeSpecText(currentMotherboard?.specs?.socket);
+  const currentMbMemoryType = normalizeSpecText(currentMotherboard?.specs?.memory_type);
+  const currentMemoryType = normalizeSpecText(currentMemory?.specs?.memory_type);
+
+  if (category === "cpu") {
+    if (candidateSocket && currentMbSocket && candidateSocket !== currentMbSocket) {
+      reasons.push("CPUソケットが現在のマザーボードと一致しません。");
+    }
+    if (candidateMemoryType && currentMbMemoryType && candidateMemoryType !== currentMbMemoryType) {
+      reasons.push("CPUの対応メモリ規格が現在のマザーボードと一致しません。");
+    }
+    if (candidateMemoryType && currentMemoryType && candidateMemoryType !== currentMemoryType) {
+      reasons.push("CPUの対応メモリ規格が現在のメモリと一致しません。");
+    }
+  }
+
+  if (category === "motherboard") {
+    if (candidateSocket && currentCpuSocket && candidateSocket !== currentCpuSocket) {
+      reasons.push("マザーボードのソケットが現在のCPUと一致しません。");
+    }
+    if (candidateMemoryType && currentCpuMemoryType && candidateMemoryType !== currentCpuMemoryType) {
+      reasons.push("マザーボードのメモリ規格が現在のCPUと一致しません。");
+    }
+    if (candidateMemoryType && currentMemoryType && candidateMemoryType !== currentMemoryType) {
+      reasons.push("マザーボードのメモリ規格が現在のメモリと一致しません。");
+    }
+  }
+
+  if (category === "memory") {
+    if (candidateMemoryType && currentMbMemoryType && candidateMemoryType !== currentMbMemoryType) {
+      reasons.push("メモリ規格が現在のマザーボードと一致しません。");
+    }
+    if (candidateMemoryType && currentCpuMemoryType && candidateMemoryType !== currentCpuMemoryType) {
+      reasons.push("メモリ規格が現在のCPU対応規格と一致しません。");
+    }
+  }
+
+  if (category === "case") {
+    if (!isCaseCompatibleWithMotherboard({ name: candidate.name, specs: candidate.specs }, currentMotherboard)) {
+      reasons.push("ケースサイズが現在のマザーボードフォームファクタに対応していません。");
+    }
+    if (currentCpuCooler) {
+      const caseMaxCooler = getCaseMaxCoolerHeightMm({ name: candidate.name, specs: candidate.specs });
+      const coolerHeight = getCpuCoolerHeightMm(currentCpuCooler);
+      if (caseMaxCooler && coolerHeight && coolerHeight > caseMaxCooler) {
+        reasons.push("ケースのCPUクーラー高制限を超えるため、現在のCPUクーラーが収まりません。");
+      }
+    }
+  }
+
+  if (category === "cpu_cooler") {
+    if (currentCase) {
+      const caseMaxCooler = getCaseMaxCoolerHeightMm(currentCase);
+      const coolerHeight = getCpuCoolerHeightMm({ name: candidate.name, specs: candidate.specs });
+      if (caseMaxCooler && coolerHeight && coolerHeight > caseMaxCooler) {
+        reasons.push("CPUクーラー高が現在のケース許容値を超えています。");
+      }
+    }
+  }
+
+  if (category === "psu") {
+    const candidateWattage = getPsuWattage({ name: candidate.name, specs: candidate.specs });
+    if (candidateWattage && candidateWattage < requiredPsuWatt) {
+      reasons.push(`PSU容量が不足しています（推奨 ${requiredPsuWatt}W 以上）。`);
+    }
+  }
+
+  return {
+    ok: reasons.length === 0,
+    reasons,
+  };
+}
+
+export function ResultView({ config, onBack, onSavedConfiguration }: ResultProps) {
   const formatCurrency = (price: number) =>
     new Intl.NumberFormat("ja-JP", {
       style: "currency",
       currency: "JPY",
     }).format(price);
-
-  const parsePsuCapacityWatts = (name: string) => {
-    const match = name.match(/(\d{3,4})\s*W/i);
-    return match ? Number(match[1]) : null;
-  };
 
   const PART_CATEGORY_LABELS: Record<string, string> = {
     cpu: "CPU",
@@ -258,6 +517,8 @@ export function ResultView({ config, onBack }: ResultProps) {
             .filter((entry): entry is [string, SavedPartResponse] => entry[1] !== null)
             .map(([category, part]) => ({
               category,
+              partType: part.part_type,
+              partId: part.id,
               name: part.name,
               price: part.price,
               url: part.url,
@@ -268,6 +529,8 @@ export function ResultView({ config, onBack }: ResultProps) {
           const cpuIndexForIgpu = parts.findIndex((p) => p.category === "cpu");
           parts.splice(cpuIndexForIgpu + 1, 0, {
             category: "gpu",
+            partType: "gpu",
+            partId: null,
             name: "内蔵GPU（統合グラフィックス）",
             price: 0,
             url: "",
@@ -279,6 +542,8 @@ export function ResultView({ config, onBack }: ResultProps) {
     : sortPartsByDisplayOrder(
         config.parts.map((part) => ({
           ...part,
+          partType: part.category,
+          partId: null,
           specs: part.specs ?? null,
         }))
       );
@@ -289,6 +554,8 @@ export function ResultView({ config, onBack }: ResultProps) {
       if (!parts.some((part) => part.category === category)) {
         parts.push({
           category,
+          partType: category,
+          partId: null,
           name: "未選択",
           price: 0,
           url: "",
@@ -302,6 +569,8 @@ export function ResultView({ config, onBack }: ResultProps) {
     if (!parts.some((part) => part.category === "cpu_cooler")) {
       parts.push({
         category: "cpu_cooler",
+        partType: "cpu_cooler",
+        partId: null,
         name: "未選択",
         price: 0,
         url: "",
@@ -311,6 +580,271 @@ export function ResultView({ config, onBack }: ResultProps) {
     }
     return sortPartsByDisplayOrder(parts);
   }, [normalizedParts]);
+
+  const [editedParts, setEditedParts] = useState<NormalizedResultPart[] | null>(null);
+  const [openEditorCategory, setOpenEditorCategory] = useState<string | null>(null);
+  const [partCandidatesByCategory, setPartCandidatesByCategory] = useState<Record<string, SavedPartResponse[]>>({});
+  const [partCandidatesLoading, setPartCandidatesLoading] = useState(false);
+  const [partCandidatesError, setPartCandidatesError] = useState<string | null>(null);
+  const [candidateQuery, setCandidateQuery] = useState("");
+  const [candidateMaker, setCandidateMaker] = useState("all");
+  const [candidateMinPrice, setCandidateMinPrice] = useState("");
+  const [candidateMaxPrice, setCandidateMaxPrice] = useState("");
+  const [ignorePriceRange, setIgnorePriceRange] = useState(true);
+  const [showAllCandidates, setShowAllCandidates] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveSuccessMessage, setSaveSuccessMessage] = useState<string | null>(null);
+  const [saveLoading, setSaveLoading] = useState(false);
+  const [pendingIncompatibleSelection, setPendingIncompatibleSelection] = useState<PendingIncompatibleSelection | null>(null);
+  const [baseSavedConfig, setBaseSavedConfig] = useState<SavedConfigurationResponse | null>(
+    isSavedConfiguration(config) ? config : null
+  );
+
+  useEffect(() => {
+    setEditedParts(null);
+    setOpenEditorCategory(null);
+    setPartCandidatesByCategory({});
+    setPartCandidatesError(null);
+    setPartCandidatesLoading(false);
+    setCandidateQuery("");
+    setCandidateMaker("all");
+    setCandidateMinPrice("");
+    setCandidateMaxPrice("");
+    setIgnorePriceRange(true);
+    setShowAllCandidates(false);
+    setSaveError(null);
+    setSaveSuccessMessage(null);
+    setSaveLoading(false);
+    setPendingIncompatibleSelection(null);
+    setBaseSavedConfig(isSavedConfiguration(config) ? config : null);
+  }, [config]);
+
+  useEffect(() => {
+    if (isSavedConfiguration(config)) {
+      return;
+    }
+    if (!config.configuration_id) {
+      return;
+    }
+    let cancelled = false;
+    const loadBase = async () => {
+      try {
+        const saved = await getSavedConfigurationById(config.configuration_id as number);
+        if (!cancelled) {
+          setBaseSavedConfig(saved);
+        }
+      } catch {
+        if (!cancelled) {
+          setBaseSavedConfig(null);
+        }
+      }
+    };
+    void loadBase();
+    return () => {
+      cancelled = true;
+    };
+  }, [config]);
+
+  const activeDisplayParts = editedParts ?? displayParts;
+  const hasManualEdits = editedParts !== null;
+
+  const resolveCandidatePartType = (category: string) => {
+    if (category === "storage2" || category === "storage3") {
+      return "storage";
+    }
+    return category;
+  };
+
+  const mapUsageForSave = (usage: string): "gaming" | "video_editing" | "general" => {
+    if (usage === "gaming") {
+      return "gaming";
+    }
+    if (usage === "creator" || usage === "video_editing") {
+      return "video_editing";
+    }
+    return "general";
+  };
+
+  const buildPartIdMap = (parts: NormalizedResultPart[]) => {
+    const partMap: Record<string, number | null> = {
+      cpu: null,
+      cpu_cooler: null,
+      gpu: null,
+      motherboard: null,
+      memory: null,
+      storage: null,
+      storage2: null,
+      storage3: null,
+      os: null,
+      psu: null,
+      case: null,
+    };
+
+    if (baseSavedConfig) {
+      partMap.cpu = baseSavedConfig.cpu_data?.id ?? null;
+      partMap.cpu_cooler = baseSavedConfig.cpu_cooler_data?.id ?? null;
+      partMap.gpu = baseSavedConfig.gpu_data?.id ?? null;
+      partMap.motherboard = baseSavedConfig.motherboard_data?.id ?? null;
+      partMap.memory = baseSavedConfig.memory_data?.id ?? null;
+      partMap.storage = baseSavedConfig.storage_data?.id ?? null;
+      partMap.storage2 = baseSavedConfig.storage2_data?.id ?? null;
+      partMap.storage3 = baseSavedConfig.storage3_data?.id ?? null;
+      partMap.os = baseSavedConfig.os_data?.id ?? null;
+      partMap.psu = baseSavedConfig.psu_data?.id ?? null;
+      partMap.case = baseSavedConfig.case_data?.id ?? null;
+    }
+
+    for (const part of parts) {
+      if (!Object.prototype.hasOwnProperty.call(partMap, part.category)) {
+        continue;
+      }
+      if (part.isPlaceholder || part.name.includes("内蔵GPU")) {
+        partMap[part.category] = null;
+        continue;
+      }
+      if (typeof part.partId === "number") {
+        partMap[part.category] = part.partId;
+      }
+    }
+
+    return partMap;
+  };
+
+  const openPartEditor = async (category: string) => {
+    if (!EDITABLE_PART_CATEGORIES.has(category as (typeof PART_DISPLAY_ORDER)[number])) {
+      return;
+    }
+
+    setOpenEditorCategory(category);
+    setCandidateQuery("");
+    setCandidateMaker("all");
+    setCandidateMinPrice("");
+    setCandidateMaxPrice("");
+    setShowAllCandidates(false);
+    setPartCandidatesError(null);
+    const candidateType = resolveCandidatePartType(category);
+
+    if (partCandidatesByCategory[candidateType]) {
+      return;
+    }
+
+    setPartCandidatesLoading(true);
+    try {
+      const candidates = await getPartsByType(candidateType);
+      const sorted = candidates
+        .slice()
+        .sort((left, right) => {
+          if (left.price !== right.price) {
+            return left.price - right.price;
+          }
+          return left.name.localeCompare(right.name, "ja");
+        });
+      setPartCandidatesByCategory((previous) => ({
+        ...previous,
+        [candidateType]: sorted,
+      }));
+    } catch (error) {
+      setPartCandidatesError(error instanceof Error ? error.message : "候補パーツの取得に失敗しました。");
+    } finally {
+      setPartCandidatesLoading(false);
+    }
+  };
+
+  const applyManualPartSelection = (category: string, selected: SavedPartResponse) => {
+    setEditedParts((previous) => {
+      const baseParts = previous ?? displayParts;
+      const nextPart: NormalizedResultPart = {
+        category,
+        partType: selected.part_type,
+        partId: selected.id,
+        name: selected.name,
+        price: selected.price,
+        url: selected.url,
+        specs: selected.specs ?? null,
+      };
+      const existingIndex = baseParts.findIndex((part) => part.category === category);
+      if (existingIndex === -1) {
+        return sortPartsByDisplayOrder([...baseParts, nextPart]);
+      }
+      const cloned = [...baseParts];
+      cloned[existingIndex] = nextPart;
+      return sortPartsByDisplayOrder(cloned);
+    });
+    setOpenEditorCategory(null);
+  };
+
+  const unsetOptionalPart = (category: "storage2" | "storage3" | "cpu_cooler") => {
+    setEditedParts((previous) => {
+      const baseParts = previous ?? displayParts;
+      const placeholder: NormalizedResultPart = {
+        category,
+        partType: category,
+        partId: null,
+        name: "未選択",
+        price: 0,
+        url: "",
+        specs: null,
+        isPlaceholder: true,
+      };
+      const existingIndex = baseParts.findIndex((part) => part.category === category);
+      if (existingIndex === -1) {
+        return sortPartsByDisplayOrder([...baseParts, placeholder]);
+      }
+      const cloned = [...baseParts];
+      cloned[existingIndex] = placeholder;
+      return sortPartsByDisplayOrder(cloned);
+    });
+    setOpenEditorCategory(null);
+  };
+
+  const handleSaveEditedConfiguration = async () => {
+    setSaveError(null);
+    setSaveSuccessMessage(null);
+    setSaveLoading(true);
+    try {
+      const sourceParts = editedParts ?? activeDisplayParts;
+      const partMap = buildPartIdMap(sourceParts);
+      const requiredKeys: Array<keyof typeof partMap> = ["cpu", "motherboard", "memory", "storage", "os", "psu", "case"];
+      const missingRequired = requiredKeys.filter((key) => !partMap[key]);
+      if (missingRequired.length > 0) {
+        throw new Error("保存に必要な主要パーツIDが不足しています。主要パーツを候補から再選択してください。");
+      }
+
+      const saved = await createSavedConfiguration({
+        budget: requestedBudget,
+        usage: mapUsageForSave(config.usage),
+        cpu: partMap.cpu,
+        cpu_cooler: partMap.cpu_cooler,
+        gpu: partMap.gpu,
+        motherboard: partMap.motherboard,
+        memory: partMap.memory,
+        storage: partMap.storage,
+        storage2: partMap.storage2,
+        storage3: partMap.storage3,
+        os: partMap.os,
+        psu: partMap.psu,
+        case: partMap.case,
+      });
+
+      setSaveSuccessMessage(`保存しました: ID ${saved.id}`);
+      if (onSavedConfiguration) {
+        onSavedConfiguration(saved);
+      }
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : "編集後構成の保存に失敗しました。");
+    } finally {
+      setSaveLoading(false);
+    }
+  };
+
+  const displayedTotalPrice = hasManualEdits
+    ? activeDisplayParts.reduce((sum, part) => {
+        if (part.isPlaceholder) {
+          return sum;
+        }
+        return sum + part.price;
+      }, 0)
+    : config.total_price;
 
   const inferStorageCapacityGb = (part: { name: string; specs?: Record<string, unknown> | null }) => {
     const capacity = Number(part.specs?.capacity_gb ?? 0);
@@ -500,17 +1034,17 @@ export function ResultView({ config, onBack }: ResultProps) {
   };
 
   const estimatedPower = useMemo(() => {
-    if (!isSavedConfiguration(config)) {
+    if (!hasManualEdits && !isSavedConfiguration(config)) {
       return config.estimated_power_w;
     }
 
-    const cpu = normalizedParts.find((part) => part.category === "cpu") ?? null;
-    const gpu = normalizedParts.find((part) => part.category === "gpu" && part.price > 0) ?? null;
-    const cpuCooler = normalizedParts.find((part) => part.category === "cpu_cooler") ?? null;
-    const motherboard = normalizedParts.find((part) => part.category === "motherboard") ?? null;
-    const memory = normalizedParts.find((part) => part.category === "memory") ?? null;
-    const storageParts = normalizedParts.filter((part) => ["storage", "storage2", "storage3"].includes(part.category));
-    const hasCase = normalizedParts.some((part) => part.category === "case");
+    const cpu = activeDisplayParts.find((part) => part.category === "cpu" && !part.isPlaceholder) ?? null;
+    const gpu = activeDisplayParts.find((part) => part.category === "gpu" && part.price > 0 && !part.isPlaceholder) ?? null;
+    const cpuCooler = activeDisplayParts.find((part) => part.category === "cpu_cooler" && !part.isPlaceholder) ?? null;
+    const motherboard = activeDisplayParts.find((part) => part.category === "motherboard" && !part.isPlaceholder) ?? null;
+    const memory = activeDisplayParts.find((part) => part.category === "memory" && !part.isPlaceholder) ?? null;
+    const storageParts = activeDisplayParts.filter((part) => ["storage", "storage2", "storage3"].includes(part.category) && !part.isPlaceholder);
+    const hasCase = activeDisplayParts.some((part) => part.category === "case" && !part.isPlaceholder);
 
     const cpuPower = inferCpuPower(cpu);
     const gpuPower = inferGpuPower(gpu);
@@ -522,26 +1056,11 @@ export function ResultView({ config, onBack }: ResultProps) {
     const casePower = hasCase ? 10 : 0;
 
     return cpuPower + gpuPower + motherboardPower + memoryPower + storagePower + coolerPower + casePower;
-  }, [config, normalizedParts]);
+  }, [activeDisplayParts, config, hasManualEdits]);
 
   const configurationId = isSavedConfiguration(config)
     ? config.id
     : config.configuration_id;
-
-  const normalizeUsageCode = (usage: string) => {
-    // 注意: App.tsx の normalizeUsageCode と同一ルールで維持すること。
-    // ここがずれると履歴側の用途分類と結果画面の表示用途が不一致になる。
-    if (usage === "video_editing") {
-      return "creator";
-    }
-    if (usage === "business" || usage === "standard") {
-      return "general";
-    }
-    if (usage === "gaming" || usage === "creator" || usage === "ai" || usage === "general") {
-      return usage;
-    }
-    return usage;
-  };
 
   const USAGE_LABELS: Record<string, string> = {
     gaming: "ゲーミングPC",
@@ -550,15 +1069,19 @@ export function ResultView({ config, onBack }: ResultProps) {
     general: "汎用PC（事務・学習向け）",
   };
   const usageCode = normalizeUsageCode(config.usage);
-  const usageLabel = USAGE_LABELS[usageCode] ?? usageCode;
-  const isAutoAdjusted = !isSavedConfiguration(config) && Boolean(config.budget_auto_adjusted);
+  const usageLabel = USAGE_LABELS[usageCode] ?? config.usage;
   const marketBudgetAdjusted = !isSavedConfiguration(config) && Boolean(config.market_budget_adjusted);
   const marketBudgetNote = !isSavedConfiguration(config) ? (config.market_budget_note ?? "") : "";
   const requestedBudget = !isSavedConfiguration(config)
     ? (config.requested_budget ?? config.budget)
     : config.budget;
   const adjustedBudget = !isSavedConfiguration(config) ? config.budget : config.budget;
-  const hasBudgetCorrection = !isSavedConfiguration(config) && isAutoAdjusted && adjustedBudget !== requestedBudget;
+  const hasBudgetCorrection = marketBudgetAdjusted && adjustedBudget !== requestedBudget;
+  const isBudgetRaised = hasBudgetCorrection && adjustedBudget > requestedBudget;
+  const budgetCorrectionLabel = isBudgetRaised ? "引き上げ補正" : "引き下げ補正";
+  const budgetCorrectionStyle = isBudgetRaised
+    ? "border-emerald-300 bg-emerald-50 text-emerald-900"
+    : "border-rose-300 bg-rose-50 text-rose-900";
   const buildPriorityCode: "cost" | "spec" | "balanced" = !isSavedConfiguration(config)
     ? (config.build_priority ?? "balanced")
     : "balanced";
@@ -581,13 +1104,17 @@ export function ResultView({ config, onBack }: ResultProps) {
   const selectedGpuGamingTierLabel = !isSavedConfiguration(config)
     ? config.selected_gpu_gaming_tier_label ?? ""
     : "";
+  const partAdjustments = !isSavedConfiguration(config)
+    ? (config.part_adjustments ?? [])
+    : [];
+  const configAutoAdjusted = !isSavedConfiguration(config) && partAdjustments.length > 0;
 
-  const currentGpuPart = normalizedParts.find((part) => part.category === "gpu" && part.price > 0)
-    ?? normalizedParts.find((part) => part.category === "gpu")
+  const currentGpuPart = activeDisplayParts.find((part) => part.category === "gpu" && part.price > 0)
+    ?? activeDisplayParts.find((part) => part.category === "gpu")
     ?? null;
   const currentGpuModelKey = currentGpuPart ? extractGpuModelKey(currentGpuPart.name) : null;
   const currentGpuModelKeyNormalized = currentGpuModelKey ? normalizeGpuModelKey(currentGpuModelKey) : null;
-  const currentCpuPart = normalizedParts.find((part) => part.category === "cpu") ?? null;
+  const currentCpuPart = activeDisplayParts.find((part) => part.category === "cpu") ?? null;
   const currentCpuModelKey = currentCpuPart ? extractCpuModelKey(currentCpuPart.name) : null;
   const currentCpuModelKeyNormalized = currentCpuModelKey ? normalizeCpuModelKey(currentCpuModelKey) : null;
   const isGamingUsage = usageCode === "gaming";
@@ -843,8 +1370,8 @@ export function ResultView({ config, onBack }: ResultProps) {
         : null,
   };
 
-  const hasCpuPart = normalizedParts.some((part) => part.category === "cpu");
-  const hasDedicatedCpuCooler = normalizedParts.some((part) => part.category === "cpu_cooler");
+  const hasCpuPart = activeDisplayParts.some((part) => part.category === "cpu" && !part.isPlaceholder);
+  const hasDedicatedCpuCooler = activeDisplayParts.some((part) => part.category === "cpu_cooler" && !part.isPlaceholder);
   const showBundledCpuCoolerNote =
     !isSavedConfiguration(config)
     && hasCpuPart
@@ -867,9 +1394,14 @@ export function ResultView({ config, onBack }: ResultProps) {
             <h2 className="text-3xl font-bold text-gray-800">
               構成提案が完成しました！
             </h2>
-            {isAutoAdjusted && (
+            {configAutoAdjusted && (
               <span className="inline-flex items-center rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-800">
-                自動調整しました
+                構成を自動調整しました
+              </span>
+            )}
+            {marketBudgetAdjusted && (
+              <span className="inline-flex items-center rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-800">
+                予算を補正しました
               </span>
             )}
           </div>
@@ -889,16 +1421,25 @@ export function ResultView({ config, onBack }: ResultProps) {
             </span>
           </div>
 
-          {isAutoAdjusted && (
-            <div className="mb-6 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-              <p className="font-semibold">
-                {marketBudgetAdjusted ? "相場変動により補正しました。" : "相場変動により最低価格を下げました。"}
-              </p>
-              {marketBudgetAdjusted && marketBudgetNote && (
-                <p className="mt-1 text-xs text-amber-800">{marketBudgetNote}</p>
-              )}
-              {!isSavedConfiguration(config) && typeof config.recommended_budget_min_for_x3d === "number" && (
-                <p className="mt-1 text-xs text-amber-800">X3D必須構成の推奨下限: {formatCurrency(config.recommended_budget_min_for_x3d)}</p>
+          {hasManualEdits && (
+            <div className="mb-6 rounded-lg border border-sky-300 bg-sky-50 px-4 py-3 text-sm text-sky-900">
+              <p className="font-semibold">手動で構成を変更中です。</p>
+              <p className="mt-1 text-xs text-sky-800">各パーツ欄の「変更」から候補を選び直せます。合計金額と推定消費電力は画面内で再計算されます。</p>
+            </div>
+          )}
+
+          <div className="mb-6 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+            <p className="font-semibold">構成パーツと選定条件を自動調整しました。</p>
+            {!isSavedConfiguration(config) && typeof config.recommended_budget_min_for_x3d === "number" && (
+              <p className="mt-1 text-xs text-amber-800">X3D必須構成の推奨下限: {formatCurrency(config.recommended_budget_min_for_x3d)}</p>
+            )}
+          </div>
+
+          {marketBudgetAdjusted && (
+            <div className="mb-6 rounded-lg border border-emerald-300 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
+              <p className="font-semibold">相場変動により予算を補正しました。</p>
+              {marketBudgetNote && (
+                <p className="mt-1 text-xs text-emerald-800">{marketBudgetNote}</p>
               )}
             </div>
           )}
@@ -907,6 +1448,24 @@ export function ResultView({ config, onBack }: ResultProps) {
             <div className="mb-6 rounded-lg border border-sky-300 bg-sky-50 px-4 py-3 text-sm text-sky-900">
               <p className="font-semibold">選定ポリシーの自動調整</p>
               <p className="mt-1 text-xs text-sky-800">{config.message}</p>
+            </div>
+          )}
+
+          {!isSavedConfiguration(config) && partAdjustments.length > 0 && (
+            <div className="mb-6 rounded-lg border border-violet-300 bg-violet-50 px-4 py-3 text-sm text-violet-900">
+              <p className="font-semibold">構成変更の内訳</p>
+              <div className="mt-2 space-y-2">
+                {partAdjustments.map((change, index) => (
+                  <div key={`${change.category}-${index}`} className="rounded-md border border-violet-200 bg-white/70 px-3 py-2">
+                    <p className="text-xs font-semibold text-violet-900">
+                      {change.category_label ?? change.category}: {change.from_name} → {change.to_name}
+                    </p>
+                    <p className="mt-1 text-[11px] text-violet-800">
+                      理由: {change.reason}
+                    </p>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 
@@ -937,8 +1496,11 @@ export function ResultView({ config, onBack }: ResultProps) {
 
           <div className="bg-blue-50 border-2 border-blue-300 rounded-lg p-6 mb-8">
             {hasBudgetCorrection && (
-              <div className="mb-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-900">
-                予算補正: {formatCurrency(requestedBudget)} → {formatCurrency(adjustedBudget)}
+              <div className={`mb-3 rounded-md border px-3 py-2 text-xs font-semibold ${budgetCorrectionStyle}`}>
+                <span className="mr-2 inline-flex items-center rounded-full border border-current px-2 py-0.5 text-[11px] leading-none">
+                  {budgetCorrectionLabel}
+                </span>
+                <span>予算補正: {formatCurrency(requestedBudget)} → {formatCurrency(adjustedBudget)}</span>
               </div>
             )}
             <div className="flex justify-between items-center">
@@ -952,7 +1514,7 @@ export function ResultView({ config, onBack }: ResultProps) {
               <div>
                 <p className="text-gray-600">構成金額</p>
                 <p className="text-2xl font-bold text-green-600">
-                  {formatCurrency(config.total_price)}
+                  {formatCurrency(displayedTotalPrice)}
                 </p>
               </div>
               <div className="text-right">
@@ -1164,14 +1726,55 @@ export function ResultView({ config, onBack }: ResultProps) {
 
           <div className="space-y-4">
             <h3 className="text-2xl font-bold text-gray-800">PC構成</h3>
-            {displayParts.map((part, index) => {
+            {activeDisplayParts.map((part, index) => {
               const isIgpu = part.category === "gpu" && part.price === 0 && part.name.includes("内蔵");
               const isUnselectedOptionalStorage = (part.category === "storage2" || part.category === "storage3") && Boolean(part.isPlaceholder);
+              const isUnselectedCpuCooler = part.category === "cpu_cooler" && Boolean(part.isPlaceholder);
               const isCaseWithoutIncludedFans = part.category === "case" && Number(part.specs?.included_fan_count ?? -1) === 0;
               const categoryLabel = PART_CATEGORY_LABELS[part.category] ?? part.category;
-              const psuCapacityWatts = part.category === "psu" ? parsePsuCapacityWatts(part.name) : null;
+              const psuCapacityWatts = part.category === "psu" ? getPsuWattage(part) : null;
               const memoryCapacityGb = part.category === "memory" ? inferMemoryCapacityGb(part) : 0;
               const memoryModuleCount = part.category === "memory" ? inferMemoryModuleCount(part) : 0;
+              const candidatePartType = resolveCandidatePartType(part.category);
+              const candidates = partCandidatesByCategory[candidatePartType] ?? [];
+              const isEditorOpen = openEditorCategory === part.category;
+              const makerOptions = Array.from(new Set(candidates.map((candidate) => inferManufacturerName({ name: candidate.name, specs: candidate.specs })))).sort((left, right) => left.localeCompare(right, "ja"));
+              const minPriceValue = Number(candidateMinPrice);
+              const maxPriceValue = Number(candidateMaxPrice);
+              const normalizedQuery = candidateQuery.trim().toLowerCase();
+              const requiredPsuWatt = Math.ceil(estimatedPower * 1.25);
+              const filteredCandidates = candidates
+                .filter((candidate) => {
+                  if (part.category === "storage") {
+                    const mediaType = inferStorageMediaTypeFromPart({
+                      name: candidate.name,
+                      specs: candidate.specs ?? null,
+                    });
+                    if (mediaType !== "ssd") {
+                      return false;
+                    }
+                  }
+                  if (normalizedQuery && !candidate.name.toLowerCase().includes(normalizedQuery)) {
+                    return false;
+                  }
+                  const maker = inferManufacturerName({ name: candidate.name, specs: candidate.specs });
+                  if (candidateMaker !== "all" && maker !== candidateMaker) {
+                    return false;
+                  }
+                  if (!ignorePriceRange) {
+                    if (candidateMinPrice && Number.isFinite(minPriceValue) && candidate.price < minPriceValue) {
+                      return false;
+                    }
+                    if (candidateMaxPrice && Number.isFinite(maxPriceValue) && candidate.price > maxPriceValue) {
+                      return false;
+                    }
+                  }
+                  return true;
+                });
+              const hasCollapsedCandidates = filteredCandidates.length > CANDIDATE_COLLAPSE_LIMIT;
+              const visibleCandidates = hasCollapsedCandidates && !showAllCandidates
+                ? filteredCandidates.slice(0, CANDIDATE_COLLAPSE_LIMIT)
+                : filteredCandidates;
               
               // 付属CPUクーラーコメントをcpu_coolerセクションに表示
               if (showBundledCpuCoolerNote && part.category === "cpu_cooler") {
@@ -1203,19 +1806,31 @@ export function ResultView({ config, onBack }: ResultProps) {
                         {part.name?.trim() ? part.name : "未選択"}
                       </p>
                     </div>
-                    {isIgpu ? (
-                      <span className="inline-block bg-green-100 text-green-700 text-xs font-semibold px-2 py-1 rounded">
-                        内蔵GPU
-                      </span>
-                    ) : isUnselectedOptionalStorage ? (
-                      <span className="inline-block bg-slate-100 text-slate-600 text-xs font-semibold px-2 py-1 rounded">
-                        任意
-                      </span>
-                    ) : (
-                      <p className="text-lg font-bold text-indigo-600">
-                        {formatCurrency(part.price)}
-                      </p>
-                    )}
+                    <div className="flex flex-col items-end gap-2">
+                      {isIgpu ? (
+                        <span className="inline-block bg-green-100 text-green-700 text-xs font-semibold px-2 py-1 rounded">
+                          内蔵GPU
+                        </span>
+                      ) : isUnselectedOptionalStorage || isUnselectedCpuCooler ? (
+                        <span className="inline-block bg-slate-100 text-slate-600 text-xs font-semibold px-2 py-1 rounded">
+                          任意
+                        </span>
+                      ) : (
+                        <p className="text-lg font-bold text-indigo-600">
+                          {formatCurrency(part.price)}
+                        </p>
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          void openPartEditor(part.category);
+                        }}
+                        className="rounded border border-indigo-300 bg-indigo-50 px-2 py-1 text-xs font-semibold text-indigo-700 hover:bg-indigo-100"
+                      >
+                        {categoryLabel}を変更
+                      </button>
+                    </div>
                   </div>
 
                   {part.category === "memory" && memoryCapacityGb > 0 && (
@@ -1252,10 +1867,160 @@ export function ResultView({ config, onBack }: ResultProps) {
                       CPU内蔵グラフィックスを使用します。別途GPUは不要です。
                     </p>
                   )}
+
+                  {isEditorOpen && (
+                    <div className="mt-3 rounded-md border border-indigo-200 bg-indigo-50 p-3">
+                      <p className="mb-2 text-xs font-semibold text-indigo-800">{categoryLabel}の候補から選択</p>
+                      <div className="mb-3 grid grid-cols-1 gap-2 md:grid-cols-2">
+                        <input
+                          value={candidateQuery}
+                          onChange={(event) => setCandidateQuery(event.target.value)}
+                          placeholder="候補名で検索"
+                          className="rounded border border-indigo-200 bg-white px-2 py-1 text-xs text-slate-800"
+                        />
+                        <select
+                          value={candidateMaker}
+                          onChange={(event) => setCandidateMaker(event.target.value)}
+                          className="rounded border border-indigo-200 bg-white px-2 py-1 text-xs text-slate-800"
+                        >
+                          <option value="all">メーカー: すべて</option>
+                          {makerOptions.map((maker) => (
+                            <option key={maker} value={maker}>{maker}</option>
+                          ))}
+                        </select>
+                        <input
+                          value={candidateMinPrice}
+                          onChange={(event) => setCandidateMinPrice(event.target.value.replace(/[^0-9]/g, ""))}
+                          placeholder="最低価格"
+                          className="rounded border border-indigo-200 bg-white px-2 py-1 text-xs text-slate-800"
+                        />
+                        <input
+                          value={candidateMaxPrice}
+                          onChange={(event) => setCandidateMaxPrice(event.target.value.replace(/[^0-9]/g, ""))}
+                          placeholder="最高価格"
+                          className="rounded border border-indigo-200 bg-white px-2 py-1 text-xs text-slate-800"
+                        />
+                      </div>
+                      <div className="mb-3 flex flex-wrap items-center gap-3 text-[11px] text-slate-700">
+                        <label className="inline-flex items-center gap-1">
+                          <input type="checkbox" checked={ignorePriceRange} onChange={(event) => setIgnorePriceRange(event.target.checked)} />
+                          価格帯を無視して表示
+                        </label>
+                        <span>
+                          表示件数: {visibleCandidates.length} / {filteredCandidates.length}（非互換はグレー表示）
+                        </span>
+                      </div>
+                      {partCandidatesLoading ? (
+                        <p className="text-xs text-indigo-700">候補を読み込み中です…</p>
+                      ) : partCandidatesError ? (
+                        <p className="text-xs text-rose-700">{partCandidatesError}</p>
+                      ) : filteredCandidates.length === 0 ? (
+                        <p className="text-xs text-indigo-700">候補が見つかりませんでした。</p>
+                      ) : (
+                        <div className="space-y-2">
+                          {visibleCandidates.map((candidate) => {
+                            const compatibility = checkPartCompatibility(part.category, candidate, activeDisplayParts, requiredPsuWatt);
+                            const maker = inferManufacturerName({ name: candidate.name, specs: candidate.specs });
+                            return (
+                              <button
+                                key={`${candidate.id}-${part.category}`}
+                                type="button"
+                                onClick={() => {
+                                  if (!compatibility.ok) {
+                                    setPendingIncompatibleSelection({
+                                      category: part.category,
+                                      candidate,
+                                      reasons: compatibility.reasons,
+                                    });
+                                    return;
+                                  }
+                                  applyManualPartSelection(part.category, candidate);
+                                }}
+                                className={`w-full rounded border px-3 py-2 text-left ${compatibility.ok ? "border-indigo-200 bg-white hover:bg-indigo-100" : "border-slate-300 bg-slate-100 text-slate-500 hover:bg-slate-200"}`}
+                              >
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="mr-4 text-xs">{candidate.name}</span>
+                                  <span className={`text-xs font-semibold ${compatibility.ok ? "text-indigo-700" : "text-slate-600"}`}>{formatCurrency(candidate.price)}</span>
+                                </div>
+                                <div className="mt-1 flex items-center justify-between gap-2 text-[11px]">
+                                  <span>メーカー: {maker}</span>
+                                  <span className={compatibility.ok ? "text-emerald-700" : "text-slate-600"}>{compatibility.ok ? "互換性OK" : "非互換候補"}</span>
+                                </div>
+                                {!compatibility.ok && compatibility.reasons.length > 0 && (
+                                  <p className="mt-1 text-[11px] font-medium text-slate-600">警告: {compatibility.reasons.join(" ")}</p>
+                                )}
+                              </button>
+                            );
+                          })}
+                          {hasCollapsedCandidates && (
+                            <button
+                              type="button"
+                              onClick={() => setShowAllCandidates((previous) => !previous)}
+                              className="w-full rounded border border-indigo-300 bg-white px-3 py-2 text-xs font-semibold text-indigo-700 hover:bg-indigo-100"
+                            >
+                              {showAllCandidates
+                                ? "候補を折りたたむ"
+                                : `候補をさらに表示（残り ${filteredCandidates.length - visibleCandidates.length} 件）`}
+                            </button>
+                          )}
+                        </div>
+                      )}
+
+                      {(part.category === "storage2" || part.category === "storage3" || part.category === "cpu_cooler") && !part.isPlaceholder && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            unsetOptionalPart(part.category as "storage2" | "storage3" | "cpu_cooler");
+                          }}
+                          className="mt-3 rounded border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+                        >
+                          未選択に戻す
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
               );
             })}
           </div>
+
+          {pendingIncompatibleSelection && (
+            <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-900/45 p-4">
+              <div className="w-full max-w-lg rounded-xl bg-white p-5 shadow-2xl">
+                <h4 className="text-base font-bold text-slate-900">非互換候補を選択しますか？</h4>
+                <p className="mt-1 text-sm text-slate-600">
+                  {PART_CATEGORY_LABELS[pendingIncompatibleSelection.category] ?? pendingIncompatibleSelection.category}: {pendingIncompatibleSelection.candidate.name}
+                </p>
+                <div className="mt-3 rounded-md border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">
+                  {pendingIncompatibleSelection.reasons.map((reason, index) => (
+                    <p key={`${reason}-${index}`}>・{reason}</p>
+                  ))}
+                </div>
+                <div className="mt-4 flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setPendingIncompatibleSelection(null)}
+                    className="rounded border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-100"
+                  >
+                    キャンセル
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      applyManualPartSelection(
+                        pendingIncompatibleSelection.category,
+                        pendingIncompatibleSelection.candidate,
+                      );
+                      setPendingIncompatibleSelection(null);
+                    }}
+                    className="rounded bg-amber-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-amber-700"
+                  >
+                    この候補を選択
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
 
         </div>
       </div>
