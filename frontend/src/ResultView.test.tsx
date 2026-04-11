@@ -1,7 +1,13 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { GenerateConfigResponse, SavedConfigurationResponse } from "./api";
 import { ResultView } from "./ResultView";
+
+async function renderResultView(config: GenerateConfigResponse | SavedConfigurationResponse) {
+  render(<ResultView config={config} onBack={() => {}} />);
+  await screen.findByText("構成提案が完成しました！");
+}
 
 vi.mock("./api", async () => {
   const actual = await vi.importActual<typeof import("./api")>("./api");
@@ -179,7 +185,7 @@ describe("ResultView", () => {
       ],
     };
 
-    render(<ResultView config={config} onBack={() => {}} />);
+    await renderResultView(config);
 
     await waitFor(() => {
       expect(screen.getByText("ゲーミングCPU順位（AMD・スペック順）")).toBeInTheDocument();
@@ -212,7 +218,7 @@ describe("ResultView", () => {
       ],
     };
 
-    render(<ResultView config={config} onBack={() => {}} />);
+    await renderResultView(config);
 
     await waitFor(() => {
       expect(screen.getByText("ゲーミングCPU選択テーブル（AMD・コスパ重視）")).toBeInTheDocument();
@@ -241,7 +247,7 @@ describe("ResultView", () => {
       ],
     };
 
-    render(<ResultView config={config} onBack={() => {}} />);
+    await renderResultView(config);
 
     await waitFor(() => {
       expect(screen.getByText("Ryzen 7 7800X3D")).toBeInTheDocument();
@@ -292,7 +298,7 @@ describe("ResultView", () => {
       created_at: "2026-04-05T12:00:00Z",
     };
 
-    render(<ResultView config={savedConfig} onBack={() => {}} />);
+    await renderResultView(savedConfig);
 
     expect(screen.getByText("保存済み構成ID: 787")).toBeInTheDocument();
     expect(screen.queryByText("新規生成ID: 787")).not.toBeInTheDocument();
@@ -316,7 +322,7 @@ describe("ResultView", () => {
       ],
     };
 
-    render(<ResultView config={config} onBack={() => {}} />);
+    await renderResultView(config);
 
     expect(screen.getByText("予算を補正しました")).toBeInTheDocument();
     expect(screen.queryByText("構成を自動調整しました")).not.toBeInTheDocument();
@@ -344,7 +350,7 @@ describe("ResultView", () => {
       ],
     };
 
-    render(<ResultView config={config} onBack={() => {}} />);
+    await renderResultView(config);
 
     expect(screen.getByText("引き上げ補正")).toBeInTheDocument();
     expect(screen.getByText("予算補正: ￥120,000 → ￥180,000")).toBeInTheDocument();
@@ -378,7 +384,7 @@ describe("ResultView", () => {
       ],
     };
 
-    render(<ResultView config={config} onBack={() => {}} />);
+    await renderResultView(config);
 
     expect(screen.getByText("構成を自動調整しました")).toBeInTheDocument();
     expect(screen.queryByText("予算を補正しました")).not.toBeInTheDocument();
@@ -405,7 +411,7 @@ describe("ResultView", () => {
       ],
     };
 
-    render(<ResultView config={config} onBack={() => {}} />);
+    await renderResultView(config);
 
     expect(screen.getByText("予算帯: プレミアム")).toBeInTheDocument();
     expect(screen.getByText("構成方針: コスト重視")).toBeInTheDocument();
@@ -426,7 +432,7 @@ describe("ResultView", () => {
       ],
     };
 
-    render(<ResultView config={config} onBack={() => {}} />);
+    await renderResultView(config);
 
     expect(screen.getByText("ゲーム配信をするならRyzen 9 9950X3Dがおすすめです。")).toBeInTheDocument();
   });
@@ -448,7 +454,7 @@ describe("ResultView", () => {
       ],
     };
 
-    render(<ResultView config={config} onBack={() => {}} />);
+    await renderResultView(config);
 
     expect(screen.getByText("予算帯: プレミアム(backend)")).toBeInTheDocument();
     expect(screen.queryByText("予算帯: プレミアム")).not.toBeInTheDocument();
@@ -469,7 +475,7 @@ describe("ResultView", () => {
       ],
     };
 
-    render(<ResultView config={config} onBack={() => {}} />);
+    await renderResultView(config);
 
     expect(screen.getByText("クリエイターPCではVRAM容量を優先し、同条件ならNVIDIAを優先します。NVIDIA対応アプリが多く、高解像度編集や重い3D素材向けの選定です。")).toBeInTheDocument();
   });
@@ -494,7 +500,7 @@ describe("ResultView", () => {
       ],
     };
 
-    render(<ResultView config={config} onBack={() => {}} />);
+    await renderResultView(config);
 
     expect(screen.getByText("付属CPUクーラーを使用")).toBeInTheDocument();
     expect(screen.getByText("CPUクーラーは未選択ですが、CPU付属クーラーを前提にしています。")).toBeInTheDocument();
@@ -521,13 +527,14 @@ describe("ResultView", () => {
       ],
     };
 
-    render(<ResultView config={config} onBack={() => {}} />);
+    await renderResultView(config);
 
     expect(screen.getByText("付属CPUクーラーを使用")).toBeInTheDocument();
     expect(screen.getByText("CPUクーラーは未選択ですが、CPU付属クーラーを前提にしています。")).toBeInTheDocument();
   });
 
   it("allows manual part replacement from result screen", async () => {
+    const user = userEvent.setup();
     const config: GenerateConfigResponse = {
       usage: "gaming",
       build_priority: "cost",
@@ -544,25 +551,32 @@ describe("ResultView", () => {
       ],
     };
 
-    render(<ResultView config={config} onBack={() => {}} />);
+    await renderResultView(config);
 
-    fireEvent.click(screen.getByRole("button", { name: "CPUを変更" }));
+    await user.click(screen.getByRole("button", { name: "CPUを変更" }));
 
     await waitFor(() => {
-      expect(screen.getByText("表示件数: 1（非互換はグレー表示）")).toBeInTheDocument();
+      expect(screen.getByText("表示件数: 1 / 1（非互換はグレー表示）")).toBeInTheDocument();
       expect(screen.getByText("AMD Ryzen 7 9700X BOX")).toBeInTheDocument();
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText("候補を読み込み中です…")).not.toBeInTheDocument();
     });
 
     expect(screen.getByText("警告: CPUの対応メモリ規格が現在のマザーボードと一致しません。 CPUの対応メモリ規格が現在のメモリと一致しません。")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: /AMD Ryzen 7 9700X BOX/ }));
+    await user.click(screen.getByRole("button", { name: /AMD Ryzen 7 9700X BOX/ }));
 
     expect(screen.getByText("非互換候補を選択しますか？")).toBeInTheDocument();
     expect(screen.getByText("この候補を選択")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "この候補を選択" }));
+    await user.click(screen.getByRole("button", { name: "この候補を選択" }));
 
-    expect(screen.getByText("手動で構成を変更中です。")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText("手動で構成を変更中です。")).toBeInTheDocument();
+    });
+
     expect(screen.getByText("AMD Ryzen 7 9700X BOX")).toBeInTheDocument();
   });
 });

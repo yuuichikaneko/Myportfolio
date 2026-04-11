@@ -49,6 +49,19 @@ f:/Python/Myportfolio/.venv/Scripts/python.exe manage.py showmigrations
 If `DB_ENGINE` is not set to `postgresql`, Django continues to use SQLite.
 
 #### PostgreSQL freeze mitigation and diagnostics
+Operations tools policy (portfolio scope):
+
+- Local administrator use only. Do not expose these tools via HTTP endpoints.
+- Manual operations only. Do not run automatically from normal app flows.
+- Restrict execution rights on shared environments to designated operators.
+- Keep disabled by default in production; enable only when needed for incident response.
+
+Target tools:
+
+- `postgres_pg_activity.py`
+- `safe_postgres_migrate.ps1`
+- `postgres_freeze_watch.ps1`
+
 Add or tune these variables in `django/.env` when using PostgreSQL:
 
 ```bash

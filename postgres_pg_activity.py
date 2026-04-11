@@ -77,8 +77,8 @@ def print_rows(rows: list[tuple[Any, ...]], headers: list[str]) -> None:
         print(fmt_row(row))
 
 
-def run_query(cur, sql: str) -> tuple[list[str], list[tuple[Any, ...]]]:
-    cur.execute(sql)
+def run_query(cur, sql: str, params: tuple[Any, ...] | list[Any] | None = None) -> tuple[list[str], list[tuple[Any, ...]]]:
+    cur.execute(sql, params or ())
     headers = [desc[0] for desc in cur.description] if cur.description else []
     rows = list(cur.fetchall()) if cur.description else []
     return headers, rows
@@ -244,7 +244,7 @@ ORDER BY waiting_for DESC, waiting_pid;
             print_rows(rows, headers)
 
         elif args.action == "idle-blockers":
-            sql = f"""
+            sql = """
 WITH waiting AS (
     SELECT pid, unnest(pg_blocking_pids(pid)) AS blocker_pid
     FROM pg_stat_activity
@@ -260,14 +260,14 @@ FROM waiting w
 JOIN pg_stat_activity ba ON ba.pid = w.blocker_pid
 WHERE ba.pid <> pg_backend_pid()
     AND ba.state = 'idle in transaction'
-    AND EXTRACT(EPOCH FROM (now() - ba.xact_start)) >= {int(args.min_idle_tx_sec)}
+    AND EXTRACT(EPOCH FROM (now() - ba.xact_start)) >= %s
 ORDER BY blocker_xact_age DESC;
 """
-            headers, rows = run_query(cur, sql)
+            headers, rows = run_query(cur, sql, (int(args.min_idle_tx_sec),))
             print_rows(rows, headers)
 
         elif args.action == "terminate-idle-blockers":
-            sql = f"""
+            sql = """
 WITH waiting AS (
     SELECT pid, unnest(pg_blocking_pids(pid)) AS blocker_pid
     FROM pg_stat_activity
@@ -279,7 +279,7 @@ targets AS (
     JOIN pg_stat_activity ba ON ba.pid = w.blocker_pid
     WHERE ba.pid <> pg_backend_pid()
         AND ba.state = 'idle in transaction'
-        AND EXTRACT(EPOCH FROM (now() - ba.xact_start)) >= {int(args.min_idle_tx_sec)}
+        AND EXTRACT(EPOCH FROM (now() - ba.xact_start)) >= %s
 )
 SELECT
     t.pid AS blocker_pid,
@@ -287,21 +287,21 @@ SELECT
 FROM targets t
 ORDER BY t.pid;
 """
-            headers, rows = run_query(cur, sql)
+            headers, rows = run_query(cur, sql, (int(args.min_idle_tx_sec),))
             print_rows(rows, headers)
 
         elif args.action == "cancel":
             if args.target_pid <= 0:
                 raise ValueError("--target-pid is required for cancel")
-            sql = f"SELECT pg_cancel_backend({args.target_pid}) AS canceled;"
-            headers, rows = run_query(cur, sql)
+            sql = "SELECT pg_cancel_backend(%s) AS canceled;"
+            headers, rows = run_query(cur, sql, (int(args.target_pid),))
             print_rows(rows, headers)
 
         elif args.action == "terminate":
             if args.target_pid <= 0:
                 raise ValueError("--target-pid is required for terminate")
-            sql = f"SELECT pg_terminate_backend({args.target_pid}) AS terminated;"
-            headers, rows = run_query(cur, sql)
+            sql = "SELECT pg_terminate_backend(%s) AS terminated;"
+            headers, rows = run_query(cur, sql, (int(args.target_pid),))
             print_rows(rows, headers)
 
     conn.close()
