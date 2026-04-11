@@ -321,8 +321,19 @@ export async function deleteSavedConfiguration(id: number): Promise<void> {
   }
 }
 
-export async function getPartsByType(partType: string): Promise<SavedPartResponse[]> {
-  const response = await safeFetch(`${API_BASE_URL}/parts/by_type/?type=${encodeURIComponent(partType)}`);
+interface GetPartsByTypeOptions {
+  slotCategory?: string;
+}
+
+export async function getPartsByType(
+  partType: string,
+  options: GetPartsByTypeOptions = {},
+): Promise<SavedPartResponse[]> {
+  const searchParams = new URLSearchParams({ type: partType });
+  if (options.slotCategory) {
+    searchParams.set("slot", options.slotCategory);
+  }
+  const response = await safeFetch(`${API_BASE_URL}/parts/by_type/?${searchParams.toString()}`);
 
   if (!response.ok) {
     throw await parseApiError(response, "Failed to get parts by type");
