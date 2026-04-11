@@ -1,5 +1,45 @@
 # Myportfolio
 
+## Reviewer Guide (Private Share)
+
+This repository is shared for portfolio review with specific reviewers only.
+
+- Scope: Django + React (Vite) configuration builder with data scraping and ops diagnostics.
+- Audience: Reviewer/collaborator access only (private repository share).
+
+### Quick Review Flow
+
+1. まず以下を順に確認:
+	- Quick Start
+	- PostgreSQL migration preparation (Django)
+	- PostgreSQL freeze mitigation and diagnostics
+2. バックエンドとフロントエンドを起動:
+
+```bash
+cd django
+python manage.py runserver 8001
+
+cd ../frontend
+npm install
+npm run dev
+```
+
+3. 動作確認URL:
+	- Backend API: `http://127.0.0.1:8001/api/`
+	- Frontend: `http://127.0.0.1:5173`（使用中なら次の空きポート）
+
+### What To Focus On
+
+- Core feature: PC configuration generation and manual part replacement UX.
+- Data quality: scraper upsert flow and integrity checks.
+- Ops maturity: timeout-guarded migration and PostgreSQL lock diagnostics.
+
+### Security/Operations Boundary
+
+- Operations tools are local administrator utilities only.
+- Do not expose these scripts via HTTP endpoints.
+- Not part of normal runtime flow; run manually when needed.
+
 ## Documents
 - Requirements: `docs/requirements.md`
 - Frontend: `frontend/README.md`
