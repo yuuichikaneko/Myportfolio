@@ -35,6 +35,8 @@ f:/Python/Myportfolio/.venv/Scripts/python.exe -m pip install -r django/django_r
 ```
 2. Create `django/.env` from `django/.env.postgresql.example` and set DB values.
 	- On Windows, keep `DB_CLIENT_ENCODING=UTF8` to avoid psycopg2 decode errors.
+	- Set `DJANGO_SECRET_KEY` (required). Example generation:
+	  `f:/Python/Myportfolio/.venv/Scripts/python.exe -c "import secrets; print(secrets.token_urlsafe(64))"`
 3. Run migrations:
 ```bash
 cd django
