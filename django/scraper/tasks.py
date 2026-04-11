@@ -15,10 +15,161 @@ from .dospara_scraper import (
     scrape_dospara_parts,
     scrape_dospara_category_parts,
 )
-from .models import CPUSelectionEntry, CPUSelectionSnapshot, GPUPerformanceEntry, GPUPerformanceSnapshot, MarketPriceRangeSnapshot, PCPart, ScraperStatus
+from .models import (
+    CPUCoolerDetail,
+    CPUDetail,
+    CPUSelectionEntry,
+    CPUSelectionSnapshot,
+    CaseDetail,
+    EfficiencyGrade,
+    FormFactor,
+    GPUDetail,
+    GPUPerformanceEntry,
+    GPUPerformanceSnapshot,
+    InterfaceType,
+    LicenseType,
+    MarketPriceRangeSnapshot,
+    MemoryDetail,
+    MemoryType,
+    MotherboardDetail,
+    OSEdition,
+    OSDetail,
+    OSFamily,
+    PCPart,
+    PSUDetail,
+    ScraperStatus,
+    SocketType,
+    StorageDetail,
+)
 
 
 logger = logging.getLogger(__name__)
+
+
+ALL_DETAIL_MODELS = (
+    CPUDetail,
+    GPUDetail,
+    MotherboardDetail,
+    MemoryDetail,
+    StorageDetail,
+    OSDetail,
+    PSUDetail,
+    CaseDetail,
+    CPUCoolerDetail,
+)
+
+
+def _ref_or_none(model, value):
+    normalized = (value or '').strip()
+    if not normalized:
+        return None
+    obj, _ = model.objects.get_or_create(name=normalized)
+    return obj
+
+
+def _build_detail_sync_payload(part):
+    if part.part_type == 'cpu':
+        return CPUDetail, {
+            'socket': part.socket,
+            'memory_type': part.memory_type,
+            'socket_ref': _ref_or_none(SocketType, part.socket),
+            'memory_type_ref': _ref_or_none(MemoryType, part.memory_type),
+            'cores': part.cores,
+            'threads': part.threads,
+            'tdp_w': part.tdp_w,
+            'base_clock_mhz': part.base_clock_mhz,
+            'boost_clock_mhz': part.boost_clock_mhz,
+        }
+    if part.part_type == 'gpu':
+        return GPUDetail, {
+            'vram_gb': part.vram_gb,
+            'vram_type': part.vram_type,
+            'tdp_w': part.tdp_w,
+            'interface': part.interface,
+            'interface_ref': _ref_or_none(InterfaceType, part.interface),
+        }
+    if part.part_type == 'motherboard':
+        return MotherboardDetail, {
+            'socket': part.socket,
+            'memory_type': part.memory_type,
+            'socket_ref': _ref_or_none(SocketType, part.socket),
+            'memory_type_ref': _ref_or_none(MemoryType, part.memory_type),
+            'chipset': part.chipset,
+            'form_factor': part.form_factor,
+            'form_factor_ref': _ref_or_none(FormFactor, part.form_factor),
+            'm2_slots': part.m2_slots,
+            'pcie_x16_slots': part.pcie_x16_slots,
+            'usb_total': part.usb_total,
+            'type_c_ports': part.type_c_ports,
+        }
+    if part.part_type == 'memory':
+        return MemoryDetail, {
+            'memory_type': part.memory_type,
+            'memory_type_ref': _ref_or_none(MemoryType, part.memory_type),
+            'capacity_gb': part.capacity_gb,
+            'speed_mhz': part.speed_mhz,
+            'form_factor': part.form_factor,
+            'form_factor_ref': _ref_or_none(FormFactor, part.form_factor),
+        }
+    if part.part_type == 'storage':
+        return StorageDetail, {
+            'capacity_gb': part.capacity_gb,
+            'interface': part.interface,
+            'form_factor': part.form_factor,
+            'interface_ref': _ref_or_none(InterfaceType, part.interface),
+            'form_factor_ref': _ref_or_none(FormFactor, part.form_factor),
+        }
+    if part.part_type == 'os':
+        return OSDetail, {
+            'os_family': part.os_family,
+            'os_edition': part.os_edition,
+            'license_type': part.license_type,
+            'os_family_ref': _ref_or_none(OSFamily, part.os_family),
+            'os_edition_ref': _ref_or_none(OSEdition, part.os_edition),
+            'license_type_ref': _ref_or_none(LicenseType, part.license_type),
+        }
+    if part.part_type == 'psu':
+        return PSUDetail, {
+            'wattage': part.wattage,
+            'efficiency_grade': part.efficiency_grade,
+            'form_factor': part.form_factor,
+            'efficiency_grade_ref': _ref_or_none(EfficiencyGrade, part.efficiency_grade),
+            'form_factor_ref': _ref_or_none(FormFactor, part.form_factor),
+        }
+    if part.part_type == 'case':
+        return CaseDetail, {
+            'form_factor': part.form_factor,
+            'form_factor_ref': _ref_or_none(FormFactor, part.form_factor),
+            'included_fan_count': part.included_fan_count,
+            'supported_fan_count': part.supported_fan_count,
+        }
+    if part.part_type == 'cpu_cooler':
+        return CPUCoolerDetail, {
+            'socket': part.socket,
+            'socket_ref': _ref_or_none(SocketType, part.socket),
+            'max_tdp_w': part.max_tdp_w,
+            'form_factor': part.form_factor,
+            'form_factor_ref': _ref_or_none(FormFactor, part.form_factor),
+        }
+    return None, None
+
+
+def _sync_part_detail(part):
+    target_model, defaults = _build_detail_sync_payload(part)
+    if target_model is None:
+        return
+
+    for model in ALL_DETAIL_MODELS:
+        if model is target_model:
+            continue
+        model.objects.filter(part_id=part.id).delete()
+
+    target_model.objects.update_or_create(part_id=part.id, defaults=defaults)
+
+
+def _sync_details_for_parts(parts):
+    for part in parts:
+        _sync_part_detail(part)
 
 
 def _extract_gpu_model_key(text: str):
@@ -292,12 +443,14 @@ def _normalize_part_types():
             existing.url = part.url
             existing.specs = part.specs or existing.specs
             existing.save(update_fields=['price', 'url', 'specs', 'updated_at'])
+            _sync_part_detail(existing)
             part.delete()
             merged += 1
             continue
 
         part.part_type = inferred
         part.save(update_fields=['part_type', 'updated_at'])
+        _sync_part_detail(part)
         changed += 1
 
     return changed, merged
@@ -340,8 +493,9 @@ def run_scraper_task():
         normalized_count = 0
         merged_count = 0
         with transaction.atomic():
+            upserted_parts = []
             for part in scraped_parts:
-                _, created = PCPart.objects.update_or_create(
+                upserted, created = PCPart.objects.update_or_create(
                     part_type=part['part_type'],
                     name=part['name'],
                     defaults={
@@ -352,7 +506,10 @@ def run_scraper_task():
                         'is_active': part.get('is_active', True),
                     },
                 )
+                upserted_parts.append(upserted)
                 saved_count += 1 if created else 0
+
+            _sync_details_for_parts(upserted_parts)
 
         normalized_count, merged_count = _normalize_part_types()
         gpu_perf_result = {}

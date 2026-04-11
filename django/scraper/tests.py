@@ -6649,6 +6649,96 @@ class UsageConversionRegressionTests(APITestCase):
 		self.assertGreater(response.data.get('budget', 0), 54980)
 		self.assertIn('OS必須', response.data.get('message', ''))
 
+	def test_generate_config_gaming_cost_market_budget_correction_raises_too_low_budget(self):
+		MarketPriceRangeSnapshot.objects.create(
+			market_min=180000,
+			market_max=1300000,
+			suggested_default=729980,
+			currency='JPY',
+			sources={'dospara_tc30_market': {'count': 120}},
+		)
+
+		response = self.client.post(
+			'/api/generate-config/',
+			{'budget': 120000, 'usage': 'gaming', 'build_priority': 'cost', 'os_edition': 'home'},
+			format='json',
+		)
+
+		self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+		self.assertTrue(response.data.get('market_budget_adjusted'))
+		self.assertTrue(response.data.get('budget_auto_adjusted'))
+		self.assertEqual(response.data.get('requested_budget'), 120000)
+		self.assertEqual(response.data.get('budget'), 180000)
+		self.assertIn('part_adjustments', response.data)
+		self.assertIsInstance(response.data.get('part_adjustments'), list)
+		self.assertIn('予算を補正しました', response.data.get('market_budget_note', ''))
+		self.assertIn('引き上げ', response.data.get('market_budget_note', ''))
+
+	def test_generate_config_gaming_cost_market_budget_correction_lowers_too_high_budget(self):
+		MarketPriceRangeSnapshot.objects.create(
+			market_min=180000,
+			market_max=1300000,
+			suggested_default=729980,
+			currency='JPY',
+			sources={'dospara_tc30_market': {'count': 120}},
+		)
+
+		response = self.client.post(
+			'/api/generate-config/',
+			{'budget': 1500000, 'usage': 'gaming', 'build_priority': 'cost', 'os_edition': 'home'},
+			format='json',
+		)
+
+		self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+		self.assertTrue(response.data.get('market_budget_adjusted'))
+		self.assertTrue(response.data.get('budget_auto_adjusted'))
+		self.assertEqual(response.data.get('requested_budget'), 1500000)
+		self.assertEqual(response.data.get('budget'), 1300000)
+		self.assertIn('予算を補正しました', response.data.get('market_budget_note', ''))
+		self.assertIn('引き下げ', response.data.get('market_budget_note', ''))
+
+	def test_generate_config_creator_spec_market_budget_correction_applies(self):
+		MarketPriceRangeSnapshot.objects.create(
+			market_min=180000,
+			market_max=1300000,
+			suggested_default=729980,
+			currency='JPY',
+			sources={'dospara_tc30_market': {'count': 120}},
+		)
+
+		response = self.client.post(
+			'/api/generate-config/',
+			{'budget': 120000, 'usage': 'creator', 'build_priority': 'spec', 'os_edition': 'home'},
+			format='json',
+		)
+
+		self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+		self.assertTrue(response.data.get('market_budget_adjusted'))
+		self.assertTrue(response.data.get('budget_auto_adjusted'))
+		self.assertEqual(response.data.get('requested_budget'), 120000)
+		self.assertEqual(response.data.get('budget'), 180000)
+
+	def test_generate_config_general_cost_market_budget_correction_applies(self):
+		MarketPriceRangeSnapshot.objects.create(
+			market_min=180000,
+			market_max=1300000,
+			suggested_default=729980,
+			currency='JPY',
+			sources={'dospara_tc30_market': {'count': 120}},
+		)
+
+		response = self.client.post(
+			'/api/generate-config/',
+			{'budget': 1500000, 'usage': 'general', 'build_priority': 'cost', 'os_edition': 'home'},
+			format='json',
+		)
+
+		self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+		self.assertTrue(response.data.get('market_budget_adjusted'))
+		self.assertTrue(response.data.get('budget_auto_adjusted'))
+		self.assertEqual(response.data.get('requested_budget'), 1500000)
+		self.assertEqual(response.data.get('budget'), 1300000)
+
 	def test_generate_config_general_spec_fallback_keeps_memory_at_16gb(self):
 		response = self.client.post(
 			'/api/generate-config/',

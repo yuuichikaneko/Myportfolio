@@ -730,7 +730,7 @@ export function ResultView({ config, onBack, onSavedConfiguration }: ResultProps
 
     setPartCandidatesLoading(true);
     try {
-      const candidates = await getPartsByType(candidateType);
+      const candidates = await getPartsByType(candidateType, { slotCategory: category });
       const sorted = candidates
         .slice()
         .sort((left, right) => {

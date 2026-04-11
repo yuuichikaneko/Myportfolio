@@ -77,8 +77,8 @@ def print_rows(rows: list[tuple[Any, ...]], headers: list[str]) -> None:
         print(fmt_row(row))
 
 
-def run_query(cur, sql: str) -> tuple[list[str], list[tuple[Any, ...]]]:
-    cur.execute(sql)
+def run_query(cur, sql: str, params: tuple[Any, ...] | list[Any] | None = None) -> tuple[list[str], list[tuple[Any, ...]]]:
+    cur.execute(sql, params or ())
     headers = [desc[0] for desc in cur.description] if cur.description else []
     rows = list(cur.fetchall()) if cur.description else []
     return headers, rows
@@ -91,10 +91,24 @@ def main() -> int:
     parser.add_argument(
         "--action",
         default="snapshot",
-        choices=["snapshot", "blockers", "cancel", "terminate"],
+        choices=[
+            "snapshot",
+            "blockers",
+            "locks",
+            "idle-blockers",
+            "terminate-idle-blockers",
+            "cancel",
+            "terminate",
+        ],
         help="Operation to run",
     )
     parser.add_argument("--target-pid", type=int, default=0, help="Target backend PID")
+    parser.add_argument(
+        "--min-idle-tx-sec",
+        type=int,
+        default=30,
+        help="Minimum idle transaction age in seconds for idle-blockers actions",
+    )
     parser.add_argument(
         "--env-path",
         default="django/.env",
@@ -157,18 +171,137 @@ ORDER BY waiting_for DESC;
             headers, rows = run_query(cur, sql)
             print_rows(rows, headers)
 
+        elif args.action == "locks":
+            sql = """
+WITH waiting AS (
+    SELECT pid, unnest(pg_blocking_pids(pid)) AS blocker_pid
+    FROM pg_stat_activity
+    WHERE cardinality(pg_blocking_pids(pid)) > 0
+),
+waiting_locks AS (
+    SELECT
+        l.pid,
+        l.locktype,
+        l.database,
+        l.mode,
+        l.granted,
+        l.relation,
+        l.page,
+        l.tuple,
+        l.classid,
+        l.objid,
+        l.objsubid,
+        l.virtualxid,
+        l.transactionid
+    FROM pg_locks l
+)
+SELECT
+    w.pid AS waiting_pid,
+    wa.usename AS waiting_user,
+    now() - wa.query_start AS waiting_for,
+    wl.locktype AS waiting_locktype,
+    wl.mode AS waiting_lockmode,
+    CASE
+        WHEN wl.relation IS NOT NULL THEN (quote_ident(ns.nspname) || '.' || quote_ident(c.relname))
+        ELSE NULL
+    END AS waiting_relation,
+    w.blocker_pid,
+    ba.usename AS blocker_user,
+    ba.state AS blocker_state,
+    bl.mode AS blocker_lockmode,
+    CASE
+        WHEN bl.relation IS NOT NULL THEN (quote_ident(ns2.nspname) || '.' || quote_ident(c2.relname))
+        ELSE NULL
+    END AS blocker_relation,
+    LEFT(wa.query, 180) AS waiting_query,
+    LEFT(ba.query, 180) AS blocker_query
+FROM waiting w
+JOIN pg_stat_activity wa ON wa.pid = w.pid
+JOIN pg_stat_activity ba ON ba.pid = w.blocker_pid
+LEFT JOIN waiting_locks wl
+    ON wl.pid = w.pid
+ AND wl.granted = false
+LEFT JOIN waiting_locks bl
+    ON bl.pid = w.blocker_pid
+ AND bl.granted = true
+ AND bl.locktype = wl.locktype
+ AND bl.database IS NOT DISTINCT FROM wl.database
+ AND bl.relation IS NOT DISTINCT FROM wl.relation
+ AND bl.page IS NOT DISTINCT FROM wl.page
+ AND bl.tuple IS NOT DISTINCT FROM wl.tuple
+ AND bl.classid IS NOT DISTINCT FROM wl.classid
+ AND bl.objid IS NOT DISTINCT FROM wl.objid
+ AND bl.objsubid IS NOT DISTINCT FROM wl.objsubid
+ AND bl.virtualxid IS NOT DISTINCT FROM wl.virtualxid
+ AND bl.transactionid IS NOT DISTINCT FROM wl.transactionid
+LEFT JOIN pg_class c ON c.oid = wl.relation
+LEFT JOIN pg_namespace ns ON ns.oid = c.relnamespace
+LEFT JOIN pg_class c2 ON c2.oid = bl.relation
+LEFT JOIN pg_namespace ns2 ON ns2.oid = c2.relnamespace
+ORDER BY waiting_for DESC, waiting_pid;
+"""
+            headers, rows = run_query(cur, sql)
+            print_rows(rows, headers)
+
+        elif args.action == "idle-blockers":
+            sql = """
+WITH waiting AS (
+    SELECT pid, unnest(pg_blocking_pids(pid)) AS blocker_pid
+    FROM pg_stat_activity
+    WHERE cardinality(pg_blocking_pids(pid)) > 0
+)
+SELECT DISTINCT
+    ba.pid AS blocker_pid,
+    ba.usename AS blocker_user,
+    ba.state AS blocker_state,
+    now() - ba.xact_start AS blocker_xact_age,
+    LEFT(ba.query, 180) AS blocker_query
+FROM waiting w
+JOIN pg_stat_activity ba ON ba.pid = w.blocker_pid
+WHERE ba.pid <> pg_backend_pid()
+    AND ba.state = 'idle in transaction'
+    AND EXTRACT(EPOCH FROM (now() - ba.xact_start)) >= %s
+ORDER BY blocker_xact_age DESC;
+"""
+            headers, rows = run_query(cur, sql, (int(args.min_idle_tx_sec),))
+            print_rows(rows, headers)
+
+        elif args.action == "terminate-idle-blockers":
+            sql = """
+WITH waiting AS (
+    SELECT pid, unnest(pg_blocking_pids(pid)) AS blocker_pid
+    FROM pg_stat_activity
+    WHERE cardinality(pg_blocking_pids(pid)) > 0
+),
+targets AS (
+    SELECT DISTINCT ba.pid
+    FROM waiting w
+    JOIN pg_stat_activity ba ON ba.pid = w.blocker_pid
+    WHERE ba.pid <> pg_backend_pid()
+        AND ba.state = 'idle in transaction'
+        AND EXTRACT(EPOCH FROM (now() - ba.xact_start)) >= %s
+)
+SELECT
+    t.pid AS blocker_pid,
+    pg_terminate_backend(t.pid) AS terminated
+FROM targets t
+ORDER BY t.pid;
+"""
+            headers, rows = run_query(cur, sql, (int(args.min_idle_tx_sec),))
+            print_rows(rows, headers)
+
         elif args.action == "cancel":
             if args.target_pid <= 0:
                 raise ValueError("--target-pid is required for cancel")
-            sql = f"SELECT pg_cancel_backend({args.target_pid}) AS canceled;"
-            headers, rows = run_query(cur, sql)
+            sql = "SELECT pg_cancel_backend(%s) AS canceled;"
+            headers, rows = run_query(cur, sql, (int(args.target_pid),))
             print_rows(rows, headers)
 
         elif args.action == "terminate":
             if args.target_pid <= 0:
                 raise ValueError("--target-pid is required for terminate")
-            sql = f"SELECT pg_terminate_backend({args.target_pid}) AS terminated;"
-            headers, rows = run_query(cur, sql)
+            sql = "SELECT pg_terminate_backend(%s) AS terminated;"
+            headers, rows = run_query(cur, sql, (int(args.target_pid),))
             print_rows(rows, headers)
 
     conn.close()

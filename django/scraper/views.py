@@ -1829,12 +1829,8 @@ def _get_latest_market_price_range_from_db():
 
 
 def _apply_scraped_market_budget_correction(budget, usage, build_priority='balanced', market_range=None):
-    # ゲーミングのコスト重視で、スクレイピング相場（min〜max）を4等分した帯に基づき予算を補正する。
-    if usage != 'gaming':
-        return budget, False, None
-    if build_priority != 'cost':
-        return budget, False, None
-
+    # 用途・方針を問わず、スクレイピング相場（min〜max）を基準に予算を補正する。
+    # 予算は相場レンジ内へクランプし、低すぎる場合は引き上げ、高すぎる場合は引き下げる。
     if market_range is None:
         market_range = _get_latest_market_price_range_from_db()
 
@@ -1857,24 +1853,24 @@ def _apply_scraped_market_budget_correction(budget, usage, build_priority='balan
     q3 = market_min + int(span * 0.75)
 
     requested = int(budget)
-    if requested <= q1:
-        tier_label = 'low'
-        cap_budget = q1
-    elif requested <= q2:
-        tier_label = 'middle'
-        cap_budget = q2
-    elif requested <= q3:
-        tier_label = 'high'
-        cap_budget = q3
-    else:
-        tier_label = 'premium'
-        cap_budget = market_max
-
-    corrected_budget = min(requested, cap_budget)
-    if corrected_budget >= int(budget):
+    corrected_budget = max(market_min, min(requested, market_max))
+    if corrected_budget == requested:
         return budget, False, None
 
-    note = f"相場データ（{tier_label}帯）に基づき、予算を¥{corrected_budget:,}へ補正しました。"
+    if corrected_budget <= q1:
+        tier_label = 'low'
+    elif corrected_budget <= q2:
+        tier_label = 'middle'
+    elif corrected_budget <= q3:
+        tier_label = 'high'
+    else:
+        tier_label = 'premium'
+
+    action_label = '引き上げ' if corrected_budget > requested else '引き下げ'
+    note = (
+        f"予算を補正しました。相場データ（{tier_label}帯）に基づき、"
+        f"予算を¥{corrected_budget:,}へ{action_label}ました。"
+    )
     return corrected_budget, True, note
 
 
@@ -7640,9 +7636,7 @@ def build_configuration_response(
     requested_build_priority = _normalize_build_priority(build_priority)
 
     input_budget = int(budget)
-    market_price_range = None
-    if usage == 'gaming' and build_priority == 'cost':
-        market_price_range = _get_latest_market_price_range_from_db()
+    market_price_range = _get_latest_market_price_range_from_db()
 
     budget, market_budget_adjusted, market_budget_note = _apply_scraped_market_budget_correction(
         input_budget,
@@ -7826,6 +7820,7 @@ def build_configuration_response(
 
     selected_parts = {}
     total_price = 0
+    initial_selected_parts_snapshot = {}
 
     for part_type in PART_ORDER:
         if use_igpu and part_type == 'gpu':
@@ -7904,6 +7899,7 @@ def build_configuration_response(
     selected_parts = _resolve_compatibility(selected_parts, usage, options=selection_options)
     selection_options = _refresh_selection_options_with_selected_parts(selection_options, selected_parts)
     total_price = _sum_selected_price(selected_parts)
+    initial_selected_parts_snapshot = dict(selected_parts)
 
     selected_parts = _rebalance_gaming_spec_gpu_memory(
         selected_parts,
@@ -8230,11 +8226,6 @@ def build_configuration_response(
         cpu_index = next((i for i, p in enumerate(selected) if p['category'] == 'cpu'), -1)
         selected.insert(cpu_index + 1, igpu_entry)
 
-    effective_budget = budget
-    if usage == 'gaming' and selection_options.get('build_priority') == 'spec' and total_price < effective_budget:
-        effective_budget = total_price
-        budget_auto_adjusted = True
-
     if usage == 'gaming' and selection_options.get('build_priority') == 'cost' and budget >= 250000:
         selected_parts, total_price = _upgrade_memory_to_capacity_target(
             selected_parts,
@@ -8406,11 +8397,11 @@ def build_configuration_response(
                     adjusted_response['x3d_enforced'] = True
                     if is_low_end_uplift:
                         adjusted_response['message'] = (
-                            f"以前ローエンドに採用した構成を基準に、X3D CPU必須のため予算を¥{probe_budget:,}へ引き上げました。"
+                            f"構成を自動調整しました。以前ローエンドに採用した構成を基準に、X3D CPU必須のため予算を¥{probe_budget:,}へ引き上げました。"
                         )
                     else:
                         adjusted_response['message'] = (
-                            f"X3D CPUを必須にするため、推奨予算を¥{probe_budget:,}へ自動調整しました。"
+                            f"構成を自動調整しました。X3D CPUを必須にするため、推奨予算を¥{probe_budget:,}へ自動調整しました。"
                         )
                     return adjusted_response, None
 
@@ -8546,6 +8537,9 @@ def build_configuration_response(
             selected_gpu_gaming_tier_label = _infer_gaming_gpu_tier_label(selected_gpu)
 
     effective_budget = requested_budget
+    if market_budget_adjusted:
+        effective_budget = budget
+        budget_auto_adjusted = True
     if usage == 'gaming' and selection_options.get('build_priority') == 'spec' and total_price < requested_budget:
         effective_budget = total_price
         budget_auto_adjusted = True
@@ -8576,6 +8570,45 @@ def build_configuration_response(
                         'url': forced_9800.url,
                         'specs': forced_9800.specs,
                     }
+
+    def _part_adjustment_reason(part_type):
+        if part_type == 'cpu':
+            return '用途・予算帯・方針に合わせてCPUを再選定しました。'
+        if part_type == 'gpu':
+            return '用途・予算帯・性能条件に合わせてGPUを再選定しました。'
+        if part_type == 'memory':
+            return '容量・速度・予算バランスを満たすためメモリを調整しました。'
+        if part_type in {'storage', 'storage2', 'storage3'}:
+            return '容量要件と予算バランスを満たすためストレージを調整しました。'
+        if part_type in {'motherboard', 'case', 'psu', 'cpu_cooler'}:
+            return '互換性と冷却・電力条件を満たすためパーツを調整しました。'
+        if part_type == 'os':
+            return 'OS必須条件を満たすため選定を調整しました。'
+        return '予算と構成条件に合わせてパーツを調整しました。'
+
+    def _to_part_adjustment_entry(part_type, before_part, after_part):
+        before_name = before_part.name if before_part else '未選択'
+        after_name = after_part.name if after_part else '未選択'
+        if before_name == after_name:
+            return None
+        return {
+            'category': part_type,
+            'category_label': PART_TYPE_LABELS.get(part_type, part_type),
+            'from_name': before_name,
+            'from_price': int(before_part.price) if before_part else 0,
+            'to_name': after_name,
+            'to_price': int(after_part.price) if after_part else 0,
+            'reason': _part_adjustment_reason(part_type),
+        }
+
+    before_parts = dict(initial_selected_parts_snapshot)
+    after_parts = dict(selected_parts)
+    after_parts.update(extra_storage_parts)
+    part_adjustments = []
+    for part_type in [*PART_ORDER, 'storage2', 'storage3']:
+        change_entry = _to_part_adjustment_entry(part_type, before_parts.get(part_type), after_parts.get(part_type))
+        if change_entry:
+            part_adjustments.append(change_entry)
 
     configuration = None
     if persist:
@@ -8676,10 +8709,11 @@ def build_configuration_response(
         'configuration_id': configuration.id if configuration else None,
         'total_price': total_price,
         'estimated_power_w': estimated_power,
+        'part_adjustments': part_adjustments,
         'parts': selected,
     }
     if x3d_enforcement_failed:
-        response_data['message'] = 'X3D CPUの必須判定は維持しましたが、現在の予算ではX3D構成を自動確定できませんでした。'
+        response_data['message'] = '構成を自動調整しましたが、現在の予算ではX3D構成を自動確定できませんでした。'
     if os_policy_message:
         if response_data.get('message'):
             response_data['message'] = f"{response_data['message']} {os_policy_message}"
@@ -8747,9 +8781,13 @@ class PCPartViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['get'])
     def by_type(self, request):
         part_type = request.query_params.get('type')
+        slot = (request.query_params.get('slot') or '').strip().lower()
         if not part_type:
             return Response({'error': 'type parameter required'}, status=status.HTTP_400_BAD_REQUEST)
         parts = PCPart.objects.filter(part_type=part_type)
+        # メインストレージ置換候補は API 側でも SSD のみ返す。
+        if part_type == 'storage' and slot == 'storage':
+            parts = [part for part in parts if _infer_storage_media_type(part) == 'ssd']
         serializer = self.get_serializer(parts, many=True)
         return Response(serializer.data)
 
