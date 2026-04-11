@@ -1,4 +1,6 @@
 from django.apps import AppConfig
+import os
+import sys
 
 
 class ScraperConfig(AppConfig):
@@ -7,6 +9,28 @@ class ScraperConfig(AppConfig):
 
     def ready(self):
         """Django起動時にスナップショット初期化タスクを実行"""
+        # 管理コマンド実行中は重い初期化を抑止して、migrate系の安定性を優先する。
+        command = (sys.argv[1] if len(sys.argv) > 1 else '').lower()
+        skip_commands = {
+            'migrate',
+            'makemigrations',
+            'showmigrations',
+            'sqlmigrate',
+            'collectstatic',
+            'check',
+            'test',
+            'shell',
+            'dbshell',
+            'createsuperuser',
+            'loaddata',
+            'dumpdata',
+            'flush',
+        }
+        if os.environ.get('DJANGO_SKIP_SCRAPER_STARTUP_INIT', '').strip().lower() in {'1', 'true', 'yes'}:
+            return
+        if command in skip_commands:
+            return
+
         import threading
         from .tasks import (
             import_market_price_range_task,

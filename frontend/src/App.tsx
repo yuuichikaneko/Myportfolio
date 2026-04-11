@@ -6,12 +6,14 @@ import {
   deleteSavedConfiguration,
   generateConfig,
   GenerateConfigResponse,
+  getSavedConfigurationById,
   getSavedConfigurations,
   getScraperStatus,
   SavedConfigurationResponse,
   ScraperStatus,
   type UsageCode,
 } from "./api";
+import { normalizeUsageCode } from "./usageUtils";
 
 interface OsBudgetToast {
   point: string;
@@ -135,21 +137,6 @@ function App() {
     return `${config.usage}|${config.budget}|${partIds.join("-")}`;
   };
 
-  const normalizeUsageCode = (usage: string): UsageCode | "all" => {
-    // 注意: ResultView.tsx の normalizeUsageCode と同一ルールで維持すること。
-    // 片側のみ更新すると、履歴フィルタと結果表示の用途解釈がずれる。
-    if (usage === "video_editing") {
-      return "creator";
-    }
-    if (usage === "business" || usage === "standard") {
-      return "general";
-    }
-    if (usage === "gaming" || usage === "creator" || usage === "ai" || usage === "general") {
-      return usage;
-    }
-    return "all";
-  };
-
   const uniqueSavedConfigurations = useMemo(() => {
     const bySignature = new Map<string, SavedConfigurationResponse>();
     for (const config of savedConfigurations) {
@@ -235,6 +222,15 @@ function App() {
     setSelectedSavedConfig(null);
     setError(null);
     setShowHistory(false);
+  };
+
+  const handleSavedFromResultView = async (saved: SavedConfigurationResponse) => {
+    setSelectedSavedConfig(saved);
+    setResult(null);
+    setShowHistory(false);
+    setHistoryLoading(true);
+    await fetchSavedConfigurations();
+    setHistoryToastMessage(`編集後の構成を保存しました (ID ${saved.id})`);
   };
 
   const handleSelectSavedConfig = (config: SavedConfigurationResponse) => {
@@ -559,7 +555,14 @@ function App() {
                   )}
                   <div className="flex gap-2 mt-3">
                     <button
-                      onClick={() => handleSelectSavedConfig(config)}
+                      onClick={async () => {
+                        try {
+                          const latest = await getSavedConfigurationById(config.id);
+                          handleSelectSavedConfig(latest);
+                        } catch {
+                          handleSelectSavedConfig(config);
+                        }
+                      }}
                       className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white text-sm rounded-lg px-3 py-2 transition-colors"
                     >
                       詳細を開く
@@ -633,7 +636,7 @@ function App() {
       )}
 
       {activeResult ? (
-        <ResultView config={activeResult} onBack={handleBack} />
+        <ResultView config={activeResult} onBack={handleBack} onSavedConfiguration={handleSavedFromResultView} />
       ) : (
         <ConfigForm onSubmit={handleGenerateConfig} isLoading={isLoading} />
       )}
