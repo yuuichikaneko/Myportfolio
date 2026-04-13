@@ -23,7 +23,9 @@ APP_ENV = config('APP_ENV', default='development')
 # See https://docs.djangoproject.com/en/4.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-rb8ad(4fam%q@k_hv-02p29fmx*a7af&pax#l64oiw_27!e&*k'
+SECRET_KEY = config('DJANGO_SECRET_KEY', default='').strip()
+if not SECRET_KEY:
+    raise RuntimeError('DJANGO_SECRET_KEY is required. Set it in django/.env or environment variables.')
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
