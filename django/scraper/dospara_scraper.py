@@ -143,7 +143,19 @@ CATEGORY_RULES = {
             "z790",
             "x670",
         ],
-        "exclude": ["noctua", "nh-", "クーラー", "cooler", "ガラス"],
+        "exclude": [
+            "noctua",
+            "nh-",
+            "クーラー",
+            "cooler",
+            "ガラス",
+            "グリス",
+            "thermal paste",
+            "phase change material",
+            "thermal pad",
+            "perihelion",
+            "mnm-ptmp",
+        ],
     },
     "memory": {
         "include": ["ddr4", "ddr5", "sodimm", "メモリ", "memory", "pc5-", "pc4-"],
@@ -632,6 +644,21 @@ def fetch_dospara_cpu_selection_material(timeout: int = 20, session: Optional[re
 
 def _infer_part_type(name: str, url: str) -> Optional[str]:
     blob = f"{name} {url}".lower()
+
+    # サーマルグリス/パッド等のアクセサリは構成パーツ対象外にする。
+    accessory_excludes = (
+        "thermal paste",
+        "phase change material",
+        "thermal pad",
+        "perihelion",
+        "mnm-ptmp",
+        "サーマルグリス",
+        "サーマルパッド",
+        "熱伝導",
+        "グリス",
+    )
+    if any(token in blob for token in accessory_excludes):
+        return None
 
     # GT 710/1030 などの GeForce GT シリーズは対象外にする。
     # GTX/RTX は対象に残すため、"gt" + 数字のみを判定する。

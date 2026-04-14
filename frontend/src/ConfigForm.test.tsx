@@ -136,4 +136,20 @@ describe("ConfigForm presets", () => {
 
     expect(screen.getByRole("spinbutton")).toHaveValue(1314478);
   });
+
+  it("keeps the general middle preset above the low-end tier", async () => {
+    render(<ConfigForm onSubmit={() => undefined} isLoading={false} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("radio", { name: /汎用PC/ })).toBeInTheDocument();
+    });
+
+    await userEvent.click(screen.getByRole("radio", { name: /汎用PC/ }));
+    const middleButtons = screen.getAllByRole("button", { name: "ミドル" });
+    const middleButton = middleButtons[0];
+    await userEvent.click(middleButton);
+
+    expect(screen.getByRole("spinbutton")).toHaveValue(224980);
+    expect(screen.getByRole("spinbutton")).not.toHaveValue(85000);
+  });
 });

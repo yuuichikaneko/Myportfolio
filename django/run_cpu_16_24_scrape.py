@@ -1,3 +1,9 @@
+import os
+import django
+
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'myportfolio_django.settings')
+django.setup()
+
 import requests
 import scraper.dospara_scraper as ds
 from scraper.models import PCPart
