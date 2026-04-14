@@ -147,15 +147,15 @@ describe("App history panel", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "保存履歴 2" }));
 
-    expect(screen.getByText("Gaming")).toBeInTheDocument();
-    expect(screen.getByText("General")).toBeInTheDocument();
+    expect(screen.getByText("ゲーミングPC")).toBeInTheDocument();
+    expect(screen.getByText("汎用PC（事務・学習向け）")).toBeInTheDocument();
 
     const usageFilter = screen.getAllByRole("combobox")[0];
     fireEvent.change(usageFilter, { target: { value: "gaming" } });
 
     await waitFor(() => {
-      expect(screen.getByText("Gaming")).toBeInTheDocument();
-      expect(screen.queryByText("General")).not.toBeInTheDocument();
+      expect(screen.getByText("ゲーミングPC")).toBeInTheDocument();
+      expect(screen.queryByText("汎用PC（事務・学習向け）")).not.toBeInTheDocument();
     });
   });
 
@@ -183,7 +183,7 @@ describe("App history panel", () => {
     await screen.findByRole("button", { name: "保存履歴 2" });
     await userEvent.click(screen.getByRole("button", { name: "保存履歴 2" }));
 
-    const gamingCard = screen.getByText("Gaming").closest("div.w-full.text-left.border");
+    const gamingCard = screen.getByText("ゲーミングPC").closest("div.w-full.text-left.border");
     expect(gamingCard).toBeTruthy();
     await userEvent.click(within(gamingCard as HTMLElement).getByRole("button", { name: "削除" }));
 
@@ -228,24 +228,24 @@ describe("App history panel", () => {
     await userEvent.type(queryInput, "82000");
 
     await waitFor(() => {
-      expect(screen.queryByText("Gaming")).not.toBeInTheDocument();
-      expect(screen.getByText("General")).toBeInTheDocument();
+      expect(screen.queryByText("ゲーミングPC")).not.toBeInTheDocument();
+      expect(screen.getByText("汎用PC（事務・学習向け）")).toBeInTheDocument();
     });
 
     await userEvent.clear(queryInput);
     await userEvent.type(queryInput, "id 1");
 
     await waitFor(() => {
-      expect(screen.getByText("Gaming")).toBeInTheDocument();
-      expect(screen.queryByText("General")).not.toBeInTheDocument();
+      expect(screen.getByText("ゲーミングPC")).toBeInTheDocument();
+      expect(screen.queryByText("汎用PC（事務・学習向け）")).not.toBeInTheDocument();
     });
 
     await userEvent.clear(queryInput);
     await userEvent.type(queryInput, "general");
 
     await waitFor(() => {
-      expect(screen.queryByText("Gaming")).not.toBeInTheDocument();
-      expect(screen.getByText("General")).toBeInTheDocument();
+      expect(screen.queryByText("ゲーミングPC")).not.toBeInTheDocument();
+      expect(screen.getByText("汎用PC（事務・学習向け）")).toBeInTheDocument();
     });
   });
 
@@ -264,8 +264,8 @@ describe("App history panel", () => {
     await userEvent.type(queryInput, "140000");
 
     await waitFor(() => {
-      expect(screen.queryByText("Gaming")).not.toBeInTheDocument();
-      expect(screen.queryByText("General")).not.toBeInTheDocument();
+      expect(screen.queryByText("ゲーミングPC")).not.toBeInTheDocument();
+      expect(screen.queryByText("汎用PC（事務・学習向け）")).not.toBeInTheDocument();
       expect(screen.getByText("条件に一致する保存済み構成はありません。")).toBeInTheDocument();
     });
 
@@ -273,8 +273,8 @@ describe("App history panel", () => {
     await userEvent.type(queryInput, "82000");
 
     await waitFor(() => {
-      expect(screen.queryByText("Gaming")).not.toBeInTheDocument();
-      expect(screen.getByText("General")).toBeInTheDocument();
+      expect(screen.queryByText("ゲーミングPC")).not.toBeInTheDocument();
+      expect(screen.getByText("汎用PC（事務・学習向け）")).toBeInTheDocument();
     });
   });
 
@@ -284,7 +284,7 @@ describe("App history panel", () => {
     await screen.findByRole("button", { name: "保存履歴 2" });
     await userEvent.click(screen.getByRole("button", { name: "保存履歴 2" }));
 
-    const gamingCard = screen.getByText("Gaming").closest("div.w-full.text-left.border");
+    const gamingCard = screen.getByText("ゲーミングPC").closest("div.w-full.text-left.border");
     expect(gamingCard).toBeTruthy();
     await userEvent.click(within(gamingCard as HTMLElement).getByRole("button", { name: "詳細を開く" }));
 

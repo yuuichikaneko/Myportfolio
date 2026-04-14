@@ -186,6 +186,382 @@ class ScraperApiTests(APITestCase):
 		self.assertNotIn('128gb', str(parts['memory']['name']).lower())
 		self.assertNotIn('2tb', str(parts['storage']['name']).lower())
 
+	def test_generate_config_general_cost_prefers_home_os_even_if_pro_requested(self):
+		PCPart.objects.create(
+			part_type='cpu',
+			name='AMD Ryzen 5 3400G BOX',
+			price=10480,
+			specs={'socket': 'AM4'},
+			url='https://www.dospara.co.jp/SBR1883/IC555726.html',
+		)
+		PCPart.objects.create(
+			part_type='motherboard',
+			name='GIGABYTE B550 GAMING X V2',
+			price=12370,
+			specs={'socket': 'AM4', 'memory_type': 'DDR4', 'form_factor': 'ATX'},
+			url='https://www.dospara.co.jp/SBR1017/IC490193.html',
+		)
+		PCPart.objects.create(
+			part_type='memory',
+			name='CFD D4U3200CS-8G',
+			price=11660,
+			specs={'memory_type': 'DDR4', 'capacity_gb': 8, 'speed_mhz': 3200},
+			url='https://www.dospara.co.jp/SBR12/IC465441.html',
+		)
+		PCPart.objects.create(
+			part_type='storage',
+			name='Verbatim Vi5000 31825-J (M.2 2280 512GB)',
+			price=14480,
+			specs={'interface': 'NVMe', 'capacity_gb': 512},
+			url='https://www.dospara.co.jp/SBR1144/IC569483.html',
+		)
+		PCPart.objects.create(
+			part_type='storage',
+			name='Samsung 990 PRO 2TB High Price',
+			price=96980,
+			specs={'interface': 'NVMe', 'capacity_gb': 2000},
+			url='https://www.dospara.co.jp/SBR1144/IC569999.html',
+		)
+		PCPart.objects.create(
+			part_type='cpu_cooler',
+			name='AINEX PC-Z05C-SRB',
+			price=3540,
+			specs={'supported_sockets': ['AM4']},
+			url='https://www.dospara.co.jp/SBR95/IC601378.html',
+		)
+		PCPart.objects.create(
+			part_type='cpu_cooler',
+			name='TRYX TURRIS T620 CPU Air Cooler Black H-T620N-DM2M-G0K',
+			price=19990,
+			specs={'supported_sockets': ['AM4', 'LGA1851']},
+			url='https://www.dospara.co.jp/SBR95/IC999620.html',
+		)
+		PCPart.objects.create(
+			part_type='psu',
+			name='KRPW-L5-400W/80+',
+			price=4580,
+			specs={'wattage': 400},
+			url='https://www.dospara.co.jp/SBR1023/IC499155.html',
+		)
+		PCPart.objects.create(
+			part_type='case',
+			name='MSI MAG FORGE 130A AIRFLOW',
+			price=4980,
+			specs={'supported_form_factors': ['ATX']},
+			url='https://www.dospara.co.jp/SBR143/IC509915.html',
+		)
+		PCPart.objects.create(
+			part_type='os',
+			name='Microsoft Windows 11 Home 日本語パッケージ版',
+			price=16480,
+			specs={},
+			url='https://www.dospara.co.jp/SBR170/IC479478.html',
+		)
+		PCPart.objects.create(
+			part_type='os',
+			name='Microsoft Windows 11 Pro 日本語パッケージ版',
+			price=23980,
+			specs={},
+			url='https://www.dospara.co.jp/SBR170/IC479479.html',
+		)
+
+		response = self.client.post(
+			'/api/generate-config/',
+			{
+				'budget': 54980,
+				'usage': 'general',
+				'build_priority': 'cost',
+				'os_edition': 'pro',
+			},
+			format='json',
+		)
+
+		self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+		parts = {p['category']: p for p in response.data['parts']}
+		self.assertIn('os', parts)
+		self.assertIn('home', str(parts['os']['name']).lower())
+		if 'cpu_cooler' in parts:
+			self.assertLessEqual(int(parts['cpu_cooler']['price']), 8000)
+		if 'storage' in parts:
+			self.assertLessEqual(int(parts['storage']['price']), 22000)
+
+	def test_generate_config_general_spec_low_budget_prefers_core_ultra_5_225_and_lga1851_motherboard(self):
+		PCPart.objects.create(
+			part_type='cpu',
+			name='Intel Core Ultra 5 225 BOX',
+			price=28370,
+			specs={'socket': 'LGA1851'},
+			url='https://www.dospara.co.jp/SBR999/IC999225.html',
+		)
+		PCPart.objects.create(
+			part_type='cpu',
+			name='Intel Core Ultra 7 265KF BOX',
+			price=49800,
+			specs={'socket': 'LGA1851'},
+			url='https://www.dospara.co.jp/SBR999/IC999265.html',
+		)
+		PCPart.objects.create(
+			part_type='motherboard',
+			name='ASRock B860M Pro-A WiFi',
+			price=21980,
+			specs={'socket': 'LGA1851', 'memory_type': 'DDR5', 'form_factor': 'MicroATX'},
+			url='https://www.dospara.co.jp/SBR999/IC999860.html',
+		)
+		PCPart.objects.create(
+			part_type='motherboard',
+			name='ASRock X870 Steel Legend WiFi',
+			price=31980,
+			specs={'socket': 'AM5', 'memory_type': 'DDR5', 'form_factor': 'ATX'},
+			url='https://www.dospara.co.jp/SBR999/IC999870.html',
+		)
+		PCPart.objects.create(
+			part_type='memory',
+			name='DDR5 16GB Low Budget',
+			price=9980,
+			specs={'memory_type': 'DDR5', 'capacity_gb': 16, 'speed_mhz': 5600},
+			url='https://www.dospara.co.jp/SBR999/IC999mem.html',
+		)
+		PCPart.objects.create(
+			part_type='storage',
+			name='NVMe 500GB Low Budget',
+			price=6980,
+			specs={'interface': 'NVMe', 'capacity_gb': 500},
+			url='https://www.dospara.co.jp/SBR999/IC999sto.html',
+		)
+		PCPart.objects.create(
+			part_type='storage',
+			name='WD Black SN770M 1TB',
+			price=15980,
+			specs={'interface': 'NVMe', 'capacity_gb': 1000},
+			url='https://www.dospara.co.jp/SBR999/IC999sto1tb.html',
+		)
+		PCPart.objects.create(
+			part_type='storage',
+			name='Samsung 990 PRO 2TB',
+			price=96980,
+			specs={'interface': 'NVMe', 'capacity_gb': 2000},
+			url='https://www.dospara.co.jp/SBR999/IC999sto2tb.html',
+		)
+		PCPart.objects.create(
+			part_type='cpu_cooler',
+			name='LGA1851 Stock Cooler Equivalent',
+			price=1980,
+			specs={'supported_sockets': ['LGA1851']},
+			url='https://www.dospara.co.jp/SBR999/IC999cool.html',
+		)
+		PCPart.objects.create(
+			part_type='psu',
+			name='400W PSU Low Budget',
+			price=4980,
+			specs={'wattage': 400},
+			url='https://www.dospara.co.jp/SBR999/IC999psu.html',
+		)
+		PCPart.objects.create(
+			part_type='case',
+			name='MicroATX Case Low Budget',
+			price=4980,
+			specs={'supported_form_factors': ['MicroATX', 'ATX']},
+			url='https://www.dospara.co.jp/SBR999/IC999case.html',
+		)
+		PCPart.objects.create(
+			part_type='os',
+			name='Microsoft Windows 11 Home 日本語パッケージ版',
+			price=16480,
+			specs={},
+			url='https://www.dospara.co.jp/SBR170/IC479478.html',
+		)
+
+		response = self.client.post(
+			'/api/generate-config/',
+			{
+				'budget': 178980,
+				'usage': 'general',
+				'build_priority': 'spec',
+				'os_edition': 'home',
+			},
+			format='json',
+		)
+
+		self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+		parts = {p['category']: p for p in response.data['parts']}
+		self.assertIn('cpu', parts)
+		self.assertIn('motherboard', parts)
+		self.assertIn('storage', parts)
+		self.assertIn('225 box', str(parts['cpu']['name']).lower())
+		self.assertEqual(str(parts['motherboard']['specs'].get('socket', '')).upper(), 'LGA1851')
+		self.assertNotIn('x870', str(parts['motherboard']['name']).lower())
+		self.assertLessEqual(int(parts['storage']['price']), 22000)
+		self.assertNotIn('990 pro', str(parts['storage']['name']).lower())
+
+	def test_generate_config_general_spec_excludes_x3d_cpu(self):
+		PCPart.objects.create(
+			part_type='cpu',
+			name='AMD Ryzen 9 9950X3D BOX',
+			price=111670,
+			specs={'socket': 'AM5'},
+			url='https://www.dospara.co.jp/SBR999/IC9950x3d.html',
+		)
+		PCPart.objects.create(
+			part_type='cpu',
+			name='AMD Ryzen 7 9700X BOX',
+			price=54800,
+			specs={'socket': 'AM5'},
+			url='https://www.dospara.co.jp/SBR999/IC9700x.html',
+		)
+		PCPart.objects.create(
+			part_type='motherboard',
+			name='ASRock B650M Pro X3D WiFi',
+			price=15980,
+			specs={'socket': 'AM5', 'memory_type': 'DDR5', 'form_factor': 'MicroATX'},
+			url='https://www.dospara.co.jp/SBR999/ICb650m.html',
+		)
+		PCPart.objects.create(
+			part_type='memory',
+			name='DDR5 16GB General Spec',
+			price=12980,
+			specs={'memory_type': 'DDR5', 'capacity_gb': 16, 'speed_mhz': 5600},
+			url='https://www.dospara.co.jp/SBR999/ICddr5-16.html',
+		)
+		PCPart.objects.create(
+			part_type='storage',
+			name='NVMe 1TB General Spec',
+			price=14980,
+			specs={'interface': 'NVMe', 'capacity_gb': 1000},
+			url='https://www.dospara.co.jp/SBR999/ICsto-1tb.html',
+		)
+		PCPart.objects.create(
+			part_type='cpu_cooler',
+			name='Air Cooler AM5 General Spec',
+			price=3980,
+			specs={'supported_sockets': ['AM5']},
+			url='https://www.dospara.co.jp/SBR999/ICcool-am5.html',
+		)
+		PCPart.objects.create(
+			part_type='psu',
+			name='500W PSU General Spec',
+			price=4980,
+			specs={'wattage': 500},
+			url='https://www.dospara.co.jp/SBR999/ICpsu500.html',
+		)
+		PCPart.objects.create(
+			part_type='case',
+			name='MicroATX Case General Spec',
+			price=5980,
+			specs={'supported_form_factors': ['MicroATX', 'ATX']},
+			url='https://www.dospara.co.jp/SBR999/ICcase-matx.html',
+		)
+		PCPart.objects.create(
+			part_type='os',
+			name='Microsoft Windows 11 Home 日本語パッケージ版',
+			price=16480,
+			specs={},
+			url='https://www.dospara.co.jp/SBR170/IC479478.html',
+		)
+
+		response = self.client.post(
+			'/api/generate-config/',
+			{
+				'budget': 247478,
+				'usage': 'general',
+				'build_priority': 'spec',
+				'os_edition': 'home',
+			},
+			format='json',
+		)
+
+		self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+		parts = {p['category']: p for p in response.data['parts']}
+		self.assertIn('cpu', parts)
+		self.assertNotIn('x3d', str(parts['cpu']['name']).lower())
+		self.assertNotIn('9950x3d', str(parts['cpu']['name']).lower())
+
+	def test_generate_config_general_cost_excludes_x3d_cpu(self):
+		PCPart.objects.create(
+			part_type='cpu',
+			name='AMD Ryzen 7 9800X3D BOX',
+			price=62180,
+			specs={'socket': 'AM5'},
+			url='https://www.dospara.co.jp/SBR999/IC9800x3d.html',
+		)
+		PCPart.objects.create(
+			part_type='cpu',
+			name='AMD Ryzen 7 9700X BOX',
+			price=54800,
+			specs={'socket': 'AM5'},
+			url='https://www.dospara.co.jp/SBR999/IC9700x-cost.html',
+		)
+		PCPart.objects.create(
+			part_type='motherboard',
+			name='ASRock B650M Pro RS (B650 AM5 MicroATX)',
+			price=15980,
+			specs={'socket': 'AM5', 'memory_type': 'DDR5', 'form_factor': 'MicroATX'},
+			url='https://www.dospara.co.jp/SBR999/ICb650m-rs.html',
+		)
+		PCPart.objects.create(
+			part_type='memory',
+			name='DDR5 16GB General Cost',
+			price=12980,
+			specs={'memory_type': 'DDR5', 'capacity_gb': 16, 'speed_mhz': 5600},
+			url='https://www.dospara.co.jp/SBR999/ICddr5-16-cost.html',
+		)
+		PCPart.objects.create(
+			part_type='storage',
+			name='NVMe 1TB General Cost',
+			price=14980,
+			specs={'interface': 'NVMe', 'capacity_gb': 1000},
+			url='https://www.dospara.co.jp/SBR999/ICsto-1tb-cost.html',
+		)
+		PCPart.objects.create(
+			part_type='cpu_cooler',
+			name='Air Cooler AM5 General Cost',
+			price=3980,
+			specs={'supported_sockets': ['AM5']},
+			url='https://www.dospara.co.jp/SBR999/ICcool-am5-cost.html',
+		)
+		PCPart.objects.create(
+			part_type='psu',
+			name='500W PSU General Cost',
+			price=4980,
+			specs={'wattage': 500},
+			url='https://www.dospara.co.jp/SBR999/ICpsu500-cost.html',
+		)
+		PCPart.objects.create(
+			part_type='case',
+			name='MicroATX Case General Cost',
+			price=5980,
+			specs={'supported_form_factors': ['MicroATX', 'ATX']},
+			url='https://www.dospara.co.jp/SBR999/ICcase-matx-cost.html',
+		)
+		PCPart.objects.create(
+			part_type='os',
+			name='Microsoft Windows 11 Home 日本語パッケージ版',
+			price=16480,
+			specs={},
+			url='https://www.dospara.co.jp/SBR170/IC479478.html',
+		)
+
+		response = self.client.post(
+			'/api/configurations/generate/',
+			{
+				'budget': 224980,
+				'usage': 'general',
+				'build_priority': 'cost',
+				'cooler_type': 'air',
+				'radiator_size': '240',
+				'cooling_profile': 'performance',
+				'case_size': 'mid',
+				'case_fan_policy': 'auto',
+				'os_edition': 'home',
+			},
+			format='json',
+		)
+
+		self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+		parts = {p['category']: p for p in response.data['parts']}
+		self.assertIn('cpu', parts)
+		self.assertNotIn('x3d', str(parts['cpu']['name']).lower())
+		self.assertNotIn('9800x3d', str(parts['cpu']['name']).lower())
+
 	def test_generate_config_premium_cost_applies_memory_storage_caps_e2e(self):
 		self._seed_high_band_market_snapshot()
 		self._seed_minimum_parts_for_high_band_cpu_e2e()
@@ -1378,6 +1754,45 @@ class ScraperApiTests(APITestCase):
 		self.assertIn('5700X3D', parts['cpu']['name'])
 		self.assertIn('16GB', parts['memory']['name'])
 		self.assertNotIn('GeForce RTX 5050', parts['gpu']['name'])
+
+	def test_pick_part_by_target_general_cost_low_prefers_am4_or_intel_over_am5(self):
+		PCPart.objects.all().delete()
+
+		intel_cpu = PCPart.objects.create(
+			part_type='cpu',
+			name='Intel Core i3 12100F General Cost',
+			price=15980,
+			specs={'socket': 'LGA1700'},
+			url='https://example.com/cpu-intel-general-cost',
+		)
+		PCPart.objects.create(
+			part_type='cpu',
+			name='AMD Ryzen 5 5600 General Cost',
+			price=19800,
+			specs={'socket': 'AM4'},
+			url='https://example.com/cpu-am4-general-cost',
+		)
+		PCPart.objects.create(
+			part_type='cpu',
+			name='AMD Ryzen 7 7700 General Cost',
+			price=39800,
+			specs={'socket': 'AM5'},
+			url='https://example.com/cpu-am5-general-cost',
+		)
+
+		picked = _pick_part_by_target(
+			'cpu',
+			budget=178980,
+			usage='general',
+			options={
+				'cpu_vendor': 'any',
+				'build_priority': 'cost',
+			},
+		)
+
+		self.assertIsNotNone(picked)
+		self.assertEqual(picked.id, intel_cpu.id)
+		self.assertNotEqual(str((picked.specs or {}).get('socket', '')).upper(), 'AM5')
 
 	def test_recommend_min_budget_for_gaming_x3d_from_low_end_config_prefers_existing_platform_uplift(self):
 		cpu_5500 = PCPart.objects.create(

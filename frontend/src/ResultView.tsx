@@ -1078,7 +1078,7 @@ export function ResultView({ config, onBack, onSavedConfiguration }: ResultProps
   const adjustedBudget = !isSavedConfiguration(config) ? config.budget : config.budget;
   const hasBudgetCorrection = marketBudgetAdjusted && adjustedBudget !== requestedBudget;
   const isBudgetRaised = hasBudgetCorrection && adjustedBudget > requestedBudget;
-  const budgetCorrectionLabel = isBudgetRaised ? "引き上げ補正" : "引き下げ補正";
+  const budgetCorrectionLabel = isBudgetRaised ? "引き上げ" : "引き下げ";
   const budgetCorrectionStyle = isBudgetRaised
     ? "border-emerald-300 bg-emerald-50 text-emerald-900"
     : "border-rose-300 bg-rose-50 text-rose-900";
@@ -1108,6 +1108,9 @@ export function ResultView({ config, onBack, onSavedConfiguration }: ResultProps
     ? (config.part_adjustments ?? [])
     : [];
   const configAutoAdjusted = !isSavedConfiguration(config) && partAdjustments.length > 0;
+  const showConfigAdjustmentNotice =
+    configAutoAdjusted
+    || (!isSavedConfiguration(config) && typeof config.recommended_budget_min_for_x3d === "number");
 
   const currentGpuPart = activeDisplayParts.find((part) => part.category === "gpu" && part.price > 0)
     ?? activeDisplayParts.find((part) => part.category === "gpu")
@@ -1401,7 +1404,7 @@ export function ResultView({ config, onBack, onSavedConfiguration }: ResultProps
             )}
             {marketBudgetAdjusted && (
               <span className="inline-flex items-center rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-800">
-                予算を補正しました
+                相場補正
               </span>
             )}
           </div>
@@ -1428,18 +1431,21 @@ export function ResultView({ config, onBack, onSavedConfiguration }: ResultProps
             </div>
           )}
 
-          <div className="mb-6 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-            <p className="font-semibold">構成パーツと選定条件を自動調整しました。</p>
-            {!isSavedConfiguration(config) && typeof config.recommended_budget_min_for_x3d === "number" && (
-              <p className="mt-1 text-xs text-amber-800">X3D必須構成の推奨下限: {formatCurrency(config.recommended_budget_min_for_x3d)}</p>
-            )}
-          </div>
+          {showConfigAdjustmentNotice && (
+            <div className="mb-6 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+              <p className="font-semibold">構成パーツと選定条件を自動調整しました。</p>
+              {!isSavedConfiguration(config) && typeof config.recommended_budget_min_for_x3d === "number" && (
+                <p className="mt-1 text-xs text-amber-800">X3D必須構成の推奨下限: {formatCurrency(config.recommended_budget_min_for_x3d)}</p>
+              )}
+            </div>
+          )}
 
           {marketBudgetAdjusted && (
             <div className="mb-6 rounded-lg border border-emerald-300 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
-              <p className="font-semibold">相場変動により予算を補正しました。</p>
-              {marketBudgetNote && (
-                <p className="mt-1 text-xs text-emerald-800">{marketBudgetNote}</p>
+              {marketBudgetNote ? (
+                <p className="text-xs text-emerald-800">{marketBudgetNote}</p>
+              ) : (
+                <p className="font-semibold">相場変動により予算を補正しました。</p>
               )}
             </div>
           )}
@@ -1500,7 +1506,7 @@ export function ResultView({ config, onBack, onSavedConfiguration }: ResultProps
                 <span className="mr-2 inline-flex items-center rounded-full border border-current px-2 py-0.5 text-[11px] leading-none">
                   {budgetCorrectionLabel}
                 </span>
-                <span>予算補正: {formatCurrency(requestedBudget)} → {formatCurrency(adjustedBudget)}</span>
+                <span>予算: {formatCurrency(requestedBudget)} → {formatCurrency(adjustedBudget)}</span>
               </div>
             )}
             <div className="flex justify-between items-center">

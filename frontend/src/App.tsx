@@ -20,6 +20,13 @@ interface OsBudgetToast {
   recommendedBudgetText: string;
 }
 
+const USAGE_LABELS_JA: Record<UsageCode, string> = {
+  gaming: "ゲーミングPC",
+  creator: "クリエイターPC",
+  ai: "AI PC（ローカルAI）",
+  general: "汎用PC（事務・学習向け）",
+};
+
 function App() {
   const [result, setResult] = useState<GenerateConfigResponse | null>(null);
   const [selectedSavedConfig, setSelectedSavedConfig] = useState<SavedConfigurationResponse | null>(null);
@@ -347,8 +354,13 @@ function App() {
       .join(" ")
       .toLowerCase();
 
+    const usageCode = normalizeUsageCode(config.usage, "general");
+    const usageLabel = usageCode === "all" ? config.usage_display : USAGE_LABELS_JA[usageCode];
+
     const target = [
       `id ${config.id}`,
+      usageCode,
+      usageLabel,
       config.usage_display,
       config.total_price.toString(),
       config.budget.toString(),
@@ -530,13 +542,17 @@ function App() {
           ) : (
             <div className="space-y-3">
               {filteredHistory.map((config) => (
+                (() => {
+                  const usageCode = normalizeUsageCode(config.usage, "general");
+                  const usageLabel = usageCode === "all" ? config.usage_display : USAGE_LABELS_JA[usageCode];
+                  return (
                 <div
                   key={config.id}
                   className="w-full text-left border border-slate-200 hover:border-indigo-400 hover:bg-indigo-50 rounded-xl p-4 transition-colors"
                 >
                   <div className="flex items-start justify-between gap-3 mb-2">
                     <div>
-                      <div className="font-semibold text-slate-900">{config.usage_display}</div>
+                      <div className="font-semibold text-slate-900">{usageLabel}</div>
                       <div className="text-xs text-slate-500">
                         ID {config.id} ・ {new Date(config.created_at).toLocaleString("ja-JP")}
                       </div>
@@ -576,6 +592,8 @@ function App() {
                     </button>
                   </div>
                 </div>
+                  );
+                })()
               ))}
             </div>
           )}
@@ -590,7 +608,16 @@ function App() {
 
             <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 text-sm text-slate-700 space-y-1 mb-5">
               <div>ID: {deleteTargetConfig.id}</div>
-              <div>用途: {deleteTargetConfig.usage_display}</div>
+              <div>
+                用途: {
+                  (() => {
+                    const usageCode = normalizeUsageCode(deleteTargetConfig.usage, "general");
+                    return usageCode === "all"
+                      ? deleteTargetConfig.usage_display
+                      : USAGE_LABELS_JA[usageCode];
+                  })()
+                }
+              </div>
               <div>予算: ¥{deleteTargetConfig.budget.toLocaleString("ja-JP")}</div>
               <div>構成金額: ¥{deleteTargetConfig.total_price.toLocaleString("ja-JP")}</div>
             </div>

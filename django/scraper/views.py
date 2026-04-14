@@ -1117,6 +1117,75 @@ def _is_cpu_vendor_match(part, cpu_vendor):
     return any(keyword in text for keyword in CPU_VENDOR_KEYWORDS.get(cpu_vendor, []))
 
 
+def _cpu_socket_code(part):
+    return str(_get_spec(part, 'socket', '') or '').strip().upper()
+
+
+def _is_am5_cpu(part):
+    return _cpu_socket_code(part) == 'AM5'
+
+
+def _is_general_cost_low_tier(usage, build_priority, budget):
+    return (
+        usage in {'general', 'business', 'standard'}
+        and build_priority == 'cost'
+        and _classify_budget_tier(int(budget or 0)) == 'low'
+    )
+
+
+def _is_general_low_tier(usage, budget):
+    return usage in {'general', 'business', 'standard'} and _classify_budget_tier(int(budget or 0)) == 'low'
+
+
+def _is_general_cost_legacy_cpu(part):
+    socket = _cpu_socket_code(part)
+    return socket == 'AM4' or _is_cpu_vendor_match(part, 'intel')
+
+
+def _pick_general_low_tier_cpu_candidate(candidates):
+    if not candidates:
+        return None
+
+    preferred = [
+        p
+        for p in candidates
+        if 'core ultra 5 225 box' in f'{getattr(p, "name", "")} {getattr(p, "url", "")}'.lower()
+    ]
+    if preferred:
+        return sorted(preferred, key=lambda p: (p.price, 0 if _is_cpu_vendor_match(p, 'intel') else 1))[0]
+
+    legacy_pool = [p for p in candidates if _is_general_cost_legacy_cpu(p)]
+    if legacy_pool:
+        return sorted(
+            legacy_pool,
+            key=lambda p: (
+                0 if not _is_am5_cpu(p) else 1,
+                0 if _is_cpu_vendor_match(p, 'intel') else 1,
+                p.price,
+            ),
+        )[0]
+
+    non_am5_pool = [p for p in candidates if not _is_am5_cpu(p)]
+    if non_am5_pool:
+        return sorted(non_am5_pool, key=lambda p: (0 if _is_cpu_vendor_match(p, 'intel') else 1, p.price))[0]
+
+    return sorted(candidates, key=lambda p: p.price)[0]
+
+
+def _pick_general_cost_cpu_candidate(candidates):
+    if not candidates:
+        return None
+
+    return sorted(
+        candidates,
+        key=lambda p: (
+            0 if _is_general_cost_legacy_cpu(p) else 1,
+            0 if not _is_am5_cpu(p) else 1,
+            p.price,
+        ),
+    )[0]
+
+
 def _is_ai_latest_generation_cpu(part):
     text = f"{getattr(part, 'name', '')} {getattr(part, 'url', '')}".lower()
     intel_latest = re.search(r'core\s*ultra\s*[3579]\s*2\d{2}[a-z]*', text) is not None
@@ -3863,6 +3932,14 @@ def _pick_part_by_target(part_type, budget, usage, weights_override=None, option
             creator_cpu_filtered = [p for p in candidates if _cpu_meets_creator_minimum(p, min_cores=8, min_threads=16)]
             if creator_cpu_filtered:
                 candidates = creator_cpu_filtered
+        if _is_general_cost_low_tier(usage, build_priority, budget):
+            legacy_pool = [p for p in candidates if _is_general_cost_legacy_cpu(p)]
+            if legacy_pool:
+                candidates = legacy_pool
+            else:
+                non_am5_pool = [p for p in candidates if not _is_am5_cpu(p)]
+                if non_am5_pool:
+                    candidates = non_am5_pool
     elif part_type == 'motherboard':
         cpu_socket = options.get('cpu_socket')
         if cpu_socket:
@@ -3954,6 +4031,11 @@ def _pick_part_by_target(part_type, budget, usage, weights_override=None, option
             ]
             if max_capacity_filtered:
                 candidates = max_capacity_filtered
+        if _is_general_cost_low_tier(usage, build_priority, budget):
+            storage_price_cap = max(18000, int(budget * 0.12))
+            capped_candidates = [p for p in candidates if p.price <= storage_price_cap]
+            if capped_candidates:
+                candidates = capped_candidates
         # 既定はSSD優先。gaming+specのみ高容量HDDのフォールバックを許容する。
         if not (usage == 'gaming' and build_priority == 'spec'):
             ssd_filtered = [p for p in candidates if _infer_storage_media_type(p) == 'ssd']
@@ -4106,8 +4188,16 @@ def _pick_part_by_target(part_type, budget, usage, weights_override=None, option
             picked_gpu = _pick_gaming_spec_gpu(within_target)
             if picked_gpu:
                 return picked_gpu
+        if part_type == 'cpu' and usage in {'general', 'business', 'standard'} and build_priority == 'spec' and _is_general_low_tier(usage, budget):
+            picked_general_low_tier_cpu = _pick_general_low_tier_cpu_candidate(within_target)
+            if picked_general_low_tier_cpu:
+                return picked_general_low_tier_cpu
         if part_type == 'cpu' and usage in {'general', 'business', 'standard'} and build_priority == 'spec':
             return max(within_target, key=lambda p: (_get_cpu_perf_score(p) or 0, -p.price))
+        if part_type == 'cpu' and _is_general_cost_low_tier(usage, build_priority, budget):
+            picked_general_cost_cpu = _pick_general_cost_cpu_candidate(within_target)
+            if picked_general_cost_cpu:
+                return picked_general_cost_cpu
         if part_type == 'psu':
             # PSU は過剰容量・過剰価格より、必要W数に近い候補を優先する。
             return sorted(
@@ -4212,6 +4302,14 @@ def _pick_part_by_target(part_type, budget, usage, weights_override=None, option
             picked_cpu = _pick_amd_gaming_cpu(cpu_pool, 'cost', require_x3d=require_gaming_x3d_cpu)
             if picked_cpu:
                 return picked_cpu
+        if part_type == 'cpu' and _is_general_low_tier(usage, budget):
+            picked_general_low_tier_cpu = _pick_general_low_tier_cpu_candidate(candidates)
+            if picked_general_low_tier_cpu:
+                return picked_general_low_tier_cpu
+        if part_type == 'cpu' and _is_general_cost_low_tier(usage, build_priority, budget):
+            picked_general_cost_cpu = _pick_general_cost_cpu_candidate(candidates)
+            if picked_general_cost_cpu:
+                return picked_general_cost_cpu
         if part_type == 'cpu' and usage == 'creator':
             # クリエイター用途 + コスト重視: 8～24コア帯を優先
             picked_creator_cpu = _pick_creator_cpu_with_budget(candidates, budget=budget, build_priority='cost')
@@ -5572,8 +5670,24 @@ def _enforce_required_os_with_budget_policy(selected_parts, budget, options=None
     options = options or {}
     adjusted = dict(selected_parts)
     policy_notes = []
+    usage = options.get('usage')
+    build_priority = options.get('build_priority')
 
     os_part = adjusted.get('os')
+
+    if usage in {'general', 'business', 'standard'} and build_priority == 'cost':
+        home_candidates = [
+            p
+            for p in _get_cached_parts_by_type('os', options=options)
+            if _is_part_suitable('os', p) and _is_os_edition_match(p, 'home')
+        ]
+        if home_candidates:
+            preferred_home = min(home_candidates, key=lambda p: p.price)
+            if os_part is None or not _is_os_edition_match(os_part, 'home'):
+                adjusted['os'] = preferred_home
+                os_part = preferred_home
+                policy_notes.append('汎用コスト重視のため、OSをHome版に調整しました。')
+
     if os_part is None:
         os_candidates = [
             p
@@ -5655,8 +5769,12 @@ def _upgrade_fallback_config_for_budget_utilization(config_response, budget, usa
         
         requested_priority = options.get('build_priority')
         general_spec_mode = usage in {'general', 'business', 'standard'} and requested_priority == 'spec'
+        general_low_tier_spec_mode = general_spec_mode and _classify_budget_tier(int(budget or 0)) == 'low'
         target_memory_capacity = _target_memory_capacity_gb(budget, usage, options=options)
-        upgrade_order = ['cpu', 'motherboard', 'cpu_cooler', 'memory'] if general_spec_mode else ['cpu', 'memory', 'gpu']
+        if general_low_tier_spec_mode:
+            upgrade_order = ['memory', 'storage']
+        else:
+            upgrade_order = ['cpu', 'motherboard', 'cpu_cooler', 'memory'] if general_spec_mode else ['cpu', 'memory', 'gpu']
 
         upgraded = False
         for part_type in upgrade_order:
@@ -5666,12 +5784,25 @@ def _upgrade_fallback_config_for_budget_utilization(config_response, budget, usa
             
             current_price = current_part.get('price', 0)
             current_capacity = _infer_memory_capacity_gb(current_part) if part_type == 'memory' else None
+            effective_options = dict(options)
+            effective_options.setdefault('usage', usage)
+            effective_options.setdefault('budget', budget)
+            current_cpu_part = selected_parts_by_category.get('cpu')
+            current_mb_part = selected_parts_by_category.get('motherboard')
+            if current_cpu_part:
+                cpu_socket = str((current_cpu_part.get('specs') or {}).get('socket', '') or '').upper()
+                if cpu_socket:
+                    effective_options['cpu_socket'] = cpu_socket
+            if current_mb_part:
+                mb_mem_type = _infer_motherboard_memory_type(current_mb_part)
+                if mb_mem_type:
+                    effective_options['motherboard_memory_type'] = mb_mem_type
             
             # 現在の部品より高い性能の候補をDB から探す
             candidates = [
                 p for p in _get_cached_parts_by_type(part_type, options=options)
                 if _is_part_suitable(part_type, p)
-                and _matches_selection_options(part_type, p, options=options)
+                and _matches_selection_options(part_type, p, options=effective_options)
                 and current_price < p.price <= current_price + remaining_budget
             ]
             if part_type == 'memory' and general_spec_mode:
@@ -5680,6 +5811,19 @@ def _upgrade_fallback_config_for_budget_utilization(config_response, budget, usa
                     if _infer_memory_capacity_gb(p) <= target_memory_capacity
                     and _infer_memory_capacity_gb(p) > (current_capacity or 0)
                 ]
+            if part_type == 'storage' and general_low_tier_spec_mode:
+                candidates = [p for p in candidates if _infer_storage_media_type(p) == 'ssd']
+                storage_price_cap = max(18000, int(budget * 0.12))
+                capped_by_price = [p for p in candidates if p.price <= storage_price_cap]
+                if not capped_by_price:
+                    candidates = []
+                else:
+                    candidates = capped_by_price
+                capped_by_capacity = [p for p in candidates if _infer_storage_capacity_gb(p) <= 1024]
+                if not capped_by_capacity:
+                    candidates = []
+                else:
+                    candidates = capped_by_capacity
             
             if candidates:
                 if part_type == 'cpu':
@@ -5703,6 +5847,14 @@ def _upgrade_fallback_config_for_budget_utilization(config_response, budget, usa
                             -p.price,
                         ),
                     )
+                elif part_type == 'storage':
+                    storage_priority = 'cost' if general_low_tier_spec_mode else options.get('build_priority', 'balanced')
+                    best = _storage_profile_pick(
+                        candidates,
+                        storage_priority,
+                        options.get('storage_preference', 'ssd'),
+                        options=effective_options,
+                    ) or candidates[0]
                 elif part_type == 'gpu':
                     best = max(candidates, key=lambda p: _infer_gaming_gpu_perf_score(p) or 0)
                 else:
@@ -5892,6 +6044,12 @@ def _upgrade_parts_with_surplus(selected_parts, total_price, budget, usage, opti
             if part_type == 'psu' and options.get('build_priority') == 'spec':
                 # 余剰予算でPSUを肥大化させない。必要Wの見直しは互換/右サイズ処理に任せる。
                 continue
+            if part_type == 'cpu' and _is_general_low_tier(usage, budget):
+                # 汎用 low 帯の spec/cost は、初期選定の低価格CPUを固定する。
+                continue
+            if part_type == 'motherboard' and _is_general_low_tier(usage, budget):
+                # 汎用 low 帯では CPU に合わせた互換MB を維持し、上位化しない。
+                continue
             if part_type == 'motherboard' and usage == 'gaming' and build_priority == 'spec':
                 # gaming + spec はGPU優先のため、余剰予算でMBを再肥大化させない。
                 continue
@@ -5903,6 +6061,15 @@ def _upgrade_parts_with_surplus(selected_parts, total_price, budget, usage, opti
                 # 予算消化率が不足している場合のみメモリ増設を許可する。
                 if total_price >= int(budget * 0.82):
                     continue
+            if part_type == 'storage' and _is_general_cost_low_tier(usage, build_priority, budget):
+                # 汎用 low + cost はストレージの過剰上振れを防ぎ、低価格帯を維持する。
+                continue
+            if part_type == 'cpu_cooler' and _is_general_cost_low_tier(usage, build_priority, budget):
+                # 汎用 low + cost はクーラーの過剰上振れを防ぐ。
+                continue
+            if part_type == 'cpu' and _is_general_cost_low_tier(usage, build_priority, budget):
+                # 汎用 low + cost は AM4/Intel 優先の安価CPU方針を維持する。
+                continue
             current = selected_parts.get(part_type)
             if not current:
                 continue
@@ -7603,6 +7770,128 @@ def _enforce_memory_speed_floor(selected_parts, budget, usage, options=None):
     return selected_parts
 
 
+def _prefer_non_x3d_cpu_when_possible(selected_parts, budget, usage, options=None):
+    """現在CPUがX3Dの場合、可能なら非X3Dへ置換する（置換不能なら現状維持）。"""
+    options = options or {}
+    current_cpu = selected_parts.get('cpu')
+    if not current_cpu or not _is_cpu_x3d(current_cpu):
+        return selected_parts, False
+
+    probe_options = dict(options)
+    probe_options['require_gaming_x3d_cpu'] = False
+    build_priority = probe_options.get('build_priority', 'balanced')
+
+    non_x3d_candidates = [
+        part
+        for part in PCPart.objects.filter(part_type='cpu').order_by('price')
+        if part.id != current_cpu.id
+        and not _is_cpu_x3d(part)
+        and _is_part_suitable('cpu', part)
+        and _matches_selection_options('cpu', part, options=probe_options)
+    ]
+    if not non_x3d_candidates:
+        return selected_parts, False
+
+    replacement = None
+    if usage == 'gaming':
+        replacement = _pick_amd_gaming_cpu(non_x3d_candidates, build_priority, require_x3d=False)
+    elif usage == 'creator':
+        replacement = _pick_creator_cpu_with_budget(non_x3d_candidates, budget, build_priority)
+    elif usage == 'ai':
+        ai_latest = [part for part in non_x3d_candidates if _is_ai_latest_generation_cpu(part)]
+        pool = ai_latest or non_x3d_candidates
+        if build_priority == 'spec':
+            replacement = sorted(
+                pool,
+                key=lambda part: (
+                    _get_cpu_perf_score(part) or 0,
+                    _extract_cpu_core_count(part),
+                    _extract_cpu_core_threads(part),
+                    -int(getattr(part, 'price', 0) or 0),
+                ),
+                reverse=True,
+            )[0]
+        else:
+            replacement = pool[0]
+    else:
+        if build_priority == 'spec':
+            replacement = sorted(
+                non_x3d_candidates,
+                key=lambda part: (
+                    _get_cpu_perf_score(part) or 0,
+                    _extract_cpu_core_count(part),
+                    _extract_cpu_core_threads(part),
+                    -int(getattr(part, 'price', 0) or 0),
+                ),
+                reverse=True,
+            )[0]
+        else:
+            if usage in {'general', 'business', 'standard'}:
+                budget_tier = _classify_budget_tier_from_market_range(
+                    budget,
+                    market_range=probe_options.get('market_price_range'),
+                )
+                perf_floor_map = {
+                    'low': 1200,
+                    'middle': 1800,
+                    'high': 2600,
+                    'premium': 4000,
+                }
+                core_floor_map = {
+                    'low': 4,
+                    'middle': 4,
+                    'high': 6,
+                    'premium': 8,
+                }
+                current_score = int(_get_cpu_perf_score(current_cpu) or 0)
+                perf_floor = int(perf_floor_map.get(budget_tier, 1000))
+                if current_score > 0:
+                    perf_floor = max(perf_floor, int(current_score * 0.65))
+                core_floor = int(core_floor_map.get(budget_tier, 4))
+
+                filtered = [
+                    part
+                    for part in non_x3d_candidates
+                    if _extract_cpu_core_count(part) >= core_floor
+                    and (_get_cpu_perf_score(part) or 0) >= perf_floor
+                ]
+                if not filtered:
+                    filtered = [
+                        part
+                        for part in non_x3d_candidates
+                        if _extract_cpu_core_count(part) >= core_floor
+                    ]
+                candidate_pool = filtered or non_x3d_candidates
+                replacement = sorted(
+                    candidate_pool,
+                    key=lambda part: (
+                        -int(_get_cpu_perf_score(part) or 0),
+                        -_extract_cpu_core_count(part),
+                        -_extract_cpu_core_threads(part),
+                        int(getattr(part, 'price', 0) or 0),
+                    ),
+                )[0]
+            else:
+                replacement = non_x3d_candidates[0]
+
+    if not replacement:
+        return selected_parts, False
+
+    original_total = _sum_selected_price(selected_parts)
+    adjusted = dict(selected_parts)
+    adjusted['cpu'] = replacement
+    adjusted = _resolve_compatibility(adjusted, usage, options=probe_options)
+    adjusted_cpu = adjusted.get('cpu')
+    if not adjusted_cpu or _is_cpu_x3d(adjusted_cpu):
+        return selected_parts, False
+
+    adjusted_total = _sum_selected_price(adjusted)
+    if original_total <= budget and adjusted_total > budget:
+        return selected_parts, False
+
+    return adjusted, True
+
+
 def build_configuration_response(
     budget,
     usage,
@@ -7739,12 +8028,19 @@ def build_configuration_response(
     selection_options['usage'] = usage
     selection_options['budget'] = budget
     selection_options['os_edition'] = _resolve_os_edition_by_usage(usage, selection_options['os_edition'])
+    if usage in {'general', 'standard'} and selection_options.get('build_priority') == 'cost':
+        # 汎用コスト重視は Home を優先する（Pro は明示要件がある用途でのみ選ぶ）。
+        selection_options['os_edition'] = 'home'
     selection_options['minimum_gaming_gpu_perf_score'] = _minimum_gaming_low_end_gpu_perf_score(budget, usage)
     selection_options['_part_type_cache'] = {}
     if market_price_range is not None:
         selection_options['market_price_range'] = market_price_range
     if auto_adjust_reference_budget is not None:
         selection_options['auto_adjust_reference_budget'] = int(auto_adjust_reference_budget)
+    if usage in {'general', 'business', 'standard'} and selection_options.get('build_priority') == 'cost':
+        # 相場補正で予算が上振れしても、汎用costはユーザー入力予算を基準に価格感を維持する。
+        anchor_budget = int(auto_adjust_reference_budget) if auto_adjust_reference_budget is not None else int(input_budget)
+        selection_options['auto_adjust_reference_budget'] = anchor_budget
     # ローエンド gaming/cost では X3D CPU を優先（強制ではなく prefer）
     # GPU(RTX 3050) 予算を圧迫しすぎないよう、X3D 強制は避け、prefer にとどめる
     if usage == 'gaming' and selection_options.get('build_priority') == 'cost' and budget < BUDGET_TIER_THRESHOLDS['low']:
@@ -7800,6 +8096,13 @@ def build_configuration_response(
             selection_options['min_storage_capacity_gb'] = 1000
         elif usage == 'general':
             selection_options['min_storage_capacity_gb'] = 512
+
+    if _is_general_cost_low_tier(usage, selection_options.get('build_priority'), budget):
+        selection_options = dict(selection_options)
+        selection_options['max_storage_capacity_gb'] = min(
+            int(selection_options.get('max_storage_capacity_gb') or 1024),
+            1024,
+        )
 
     if selection_options.get('max_storage_capacity_gb') and selection_options.get('min_storage_capacity_gb'):
         if int(selection_options['min_storage_capacity_gb']) > int(selection_options['max_storage_capacity_gb']):
@@ -8509,6 +8812,16 @@ def build_configuration_response(
                 'specs': cpu_part.specs,
             }
 
+    selected_parts, non_x3d_cpu_applied = _prefer_non_x3d_cpu_when_possible(
+        selected_parts,
+        budget,
+        usage,
+        options=selection_options,
+    )
+    if non_x3d_cpu_applied:
+        selection_options = _refresh_selection_options_with_selected_parts(selection_options, selected_parts)
+        total_price = _sum_selected_price({**selected_parts, **extra_storage_parts})
+
     os_policy_message = None
     selected_parts, os_policy_budget, os_policy_message, os_policy_error = _enforce_required_os_with_budget_policy(
         selected_parts,
@@ -8623,7 +8936,7 @@ def build_configuration_response(
                 use_igpu,
             ):
                 return build_configuration_response(
-                    budget,
+                    input_budget,
                     usage,
                     cooler_type,
                     radiator_size,

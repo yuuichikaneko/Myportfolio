@@ -324,12 +324,11 @@ describe("ResultView", () => {
 
     await renderResultView(config);
 
-    expect(screen.getByText("予算を補正しました")).toBeInTheDocument();
+    expect(screen.getByText("相場補正")).toBeInTheDocument();
     expect(screen.queryByText("構成を自動調整しました")).not.toBeInTheDocument();
-    expect(screen.getByText("相場変動により予算を補正しました。")).toBeInTheDocument();
     expect(screen.getByText("予算を補正しました。相場データ（high帯）に基づき、予算を¥520,000へ補正しました。")).toBeInTheDocument();
-    expect(screen.getByText("引き下げ補正")).toBeInTheDocument();
-    expect(screen.getByText("予算補正: ￥574,980 → ￥520,000")).toBeInTheDocument();
+    expect(screen.getByText("引き下げ")).toBeInTheDocument();
+    expect(screen.getByText("予算: ￥574,980 → ￥520,000")).toBeInTheDocument();
   });
 
   it("shows raise-direction label when budget correction increases budget", async () => {
@@ -352,8 +351,8 @@ describe("ResultView", () => {
 
     await renderResultView(config);
 
-    expect(screen.getByText("引き上げ補正")).toBeInTheDocument();
-    expect(screen.getByText("予算補正: ￥120,000 → ￥180,000")).toBeInTheDocument();
+    expect(screen.getByText("引き上げ")).toBeInTheDocument();
+    expect(screen.getByText("予算: ￥120,000 → ￥180,000")).toBeInTheDocument();
   });
 
   it("shows configuration auto-adjustment separately from budget correction", async () => {

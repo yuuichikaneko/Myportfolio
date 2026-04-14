@@ -441,7 +441,7 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
     }
 
     if (usage === "general") {
-      const bases = [69980, 89980, 119980, 169980];
+      const bases = [189980, 239980, 379980, 599980];
       const [entry, middle, high, flagship] = toPresetValues(bases);
       return [
         { label: "ローエンド", value: entry },
