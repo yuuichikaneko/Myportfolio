@@ -49,7 +49,7 @@ class ConfigurationSerializer(serializers.ModelSerializer):
     class Meta:
         model = Configuration
         fields = [
-            'id', 'budget', 'budget_tier', 'budget_tier_label', 'usage', 'usage_display', 'total_price',
+            'id', 'name', 'budget', 'budget_tier', 'budget_tier_label', 'usage', 'usage_display', 'total_price',
             'cpu', 'cpu_cooler', 'gpu', 'motherboard', 'memory', 'storage', 'storage2', 'storage3', 'os', 'psu', 'case',
             'cpu_data', 'cpu_cooler_data', 'gpu_data', 'motherboard_data', 'memory_data', 'storage_data', 'storage2_data', 'storage3_data', 'os_data', 'psu_data', 'case_data',
             'created_at'

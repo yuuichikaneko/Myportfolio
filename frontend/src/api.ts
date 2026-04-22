@@ -59,6 +59,7 @@ async function parseApiError(response: Response, fallbackMessage: string): Promi
 export interface GenerateConfigRequest {
   budget: number;
   usage: UsageCode;
+  name?: string;
   cooler_type?: "air" | "liquid";
   radiator_size?: "120" | "240" | "360";
   cooling_profile?: "silent" | "performance";
@@ -142,6 +143,7 @@ export interface SavedPartResponse {
 
 export interface SavedConfigurationResponse {
   id: number;
+  name?: string;
   budget: number;
   budget_tier?: "low" | "middle" | "high" | "premium";
   budget_tier_label?: string;
@@ -163,6 +165,7 @@ export interface SavedConfigurationResponse {
 }
 
 export interface CreateSavedConfigurationRequest {
+  name?: string;
   budget: number;
   usage: "gaming" | "video_editing" | "general";
   cpu: number | null;
@@ -306,6 +309,25 @@ export async function createSavedConfiguration(
 
   if (!response.ok) {
     throw await parseApiError(response, "Failed to create saved configuration");
+  }
+
+  return response.json();
+}
+
+export async function updateSavedConfiguration(
+  id: number,
+  request: Partial<CreateSavedConfigurationRequest>
+): Promise<SavedConfigurationResponse> {
+  const response = await safeFetch(`${API_BASE_URL}/configurations/${id}/`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(request),
+  });
+
+  if (!response.ok) {
+    throw await parseApiError(response, "Failed to update saved configuration");
   }
 
   return response.json();

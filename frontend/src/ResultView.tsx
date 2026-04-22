@@ -595,6 +595,9 @@ export function ResultView({ config, onBack, onSavedConfiguration }: ResultProps
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveSuccessMessage, setSaveSuccessMessage] = useState<string | null>(null);
   const [saveLoading, setSaveLoading] = useState(false);
+  const [editingConfigurationName, setEditingConfigurationName] = useState<string>("");
+  const [nameUpdateLoading, setNameUpdateLoading] = useState(false);
+  const [nameUpdateError, setNameUpdateError] = useState<string | null>(null);
   const [pendingIncompatibleSelection, setPendingIncompatibleSelection] = useState<PendingIncompatibleSelection | null>(null);
   const [baseSavedConfig, setBaseSavedConfig] = useState<SavedConfigurationResponse | null>(
     isSavedConfiguration(config) ? config : null
@@ -615,6 +618,9 @@ export function ResultView({ config, onBack, onSavedConfiguration }: ResultProps
     setSaveError(null);
     setSaveSuccessMessage(null);
     setSaveLoading(false);
+    setEditingConfigurationName(isSavedConfiguration(config) ? (config.name || "") : "");
+    setNameUpdateError(null);
+    setNameUpdateLoading(false);
     setPendingIncompatibleSelection(null);
     setBaseSavedConfig(isSavedConfiguration(config) ? config : null);
   }, [config]);
@@ -811,6 +817,7 @@ export function ResultView({ config, onBack, onSavedConfiguration }: ResultProps
       }
 
       const saved = await createSavedConfiguration({
+        name: "name" in config ? config.name : undefined,
         budget: requestedBudget,
         usage: mapUsageForSave(config.usage),
         cpu: partMap.cpu,
@@ -1498,6 +1505,56 @@ export function ResultView({ config, onBack, onSavedConfiguration }: ResultProps
             <p className="text-sm text-gray-500 -mt-4 mb-6">
               保存日時: {new Date(config.created_at).toLocaleString("ja-JP")}
             </p>
+          )}
+
+          {isSavedConfiguration(config) && (
+            <div className="bg-indigo-50 border border-indigo-300 rounded-lg p-4 mb-6">
+              <p className="text-sm font-semibold text-indigo-900 mb-2">保存名</p>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  maxLength={120}
+                  value={editingConfigurationName}
+                  onChange={(e) => {
+                    setEditingConfigurationName(e.target.value);
+                    setNameUpdateError(null);
+                  }}
+                  placeholder="構成の名前（例: 9800X3D + RX 7600 構成）"
+                  className="flex-1 border border-indigo-300 rounded-lg px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+                <button
+                  onClick={async () => {
+                    setNameUpdateError(null);
+                    setNameUpdateLoading(true);
+                    try {
+                      const updated = await (async () => {
+                        const { updateSavedConfiguration } = await import("./api");
+                        return await updateSavedConfiguration(config.id, {
+                          name: editingConfigurationName.trim(),
+                        });
+                      })();
+                      
+                      // 保存成功時、親コンポーネントに通知
+                      if (onSavedConfiguration) {
+                        onSavedConfiguration(updated);
+                      }
+                      setNameUpdateError(null);
+                    } catch (error) {
+                      setNameUpdateError(error instanceof Error ? error.message : "保存名の更新に失敗しました。");
+                    } finally {
+                      setNameUpdateLoading(false);
+                    }
+                  }}
+                  disabled={nameUpdateLoading || editingConfigurationName === (config.name || "")}
+                  className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-400 text-white px-4 py-2 rounded-lg text-sm font-semibold transition-colors disabled:cursor-not-allowed"
+                >
+                  {nameUpdateLoading ? "更新中..." : "更新"}
+                </button>
+              </div>
+              {nameUpdateError && (
+                <p className="mt-2 text-xs text-red-700">{nameUpdateError}</p>
+              )}
+            </div>
           )}
 
           <div className="bg-blue-50 border-2 border-blue-300 rounded-lg p-6 mb-8">

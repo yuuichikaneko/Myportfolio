@@ -162,6 +162,7 @@ function App() {
     budget: number,
     usage: UsageCode,
     options: {
+      name: string;
       coolerType: "air" | "liquid";
       radiatorSize: "120" | "240" | "360";
       coolingProfile: "silent" | "performance";
@@ -188,6 +189,7 @@ function App() {
       const response = await generateConfig({
         budget,
         usage,
+        name: options.name || undefined,
         cooler_type: options.coolerType,
         radiator_size: options.radiatorSize,
         cooling_profile: options.coolingProfile,
@@ -359,6 +361,7 @@ function App() {
 
     const target = [
       `id ${config.id}`,
+      config.name ?? "",
       usageCode,
       usageLabel,
       config.usage_display,
@@ -552,9 +555,9 @@ function App() {
                 >
                   <div className="flex items-start justify-between gap-3 mb-2">
                     <div>
-                      <div className="font-semibold text-slate-900">{usageLabel}</div>
+                      <div className="font-semibold text-slate-900">{config.name?.trim() ? config.name : usageLabel}</div>
                       <div className="text-xs text-slate-500">
-                        ID {config.id} ・ {new Date(config.created_at).toLocaleString("ja-JP")}
+                        {usageLabel} ・ ID {config.id} ・ {new Date(config.created_at).toLocaleString("ja-JP")}
                       </div>
                     </div>
                     <div className="text-sm font-bold text-indigo-600">
@@ -620,6 +623,7 @@ function App() {
               </div>
               <div>予算: ¥{deleteTargetConfig.budget.toLocaleString("ja-JP")}</div>
               <div>構成金額: ¥{deleteTargetConfig.total_price.toLocaleString("ja-JP")}</div>
+              {deleteTargetConfig.name?.trim() && <div>保存名: {deleteTargetConfig.name}</div>}
             </div>
 
             <div className="flex gap-2 justify-end">

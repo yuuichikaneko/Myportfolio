@@ -27,6 +27,7 @@ interface ConfigFormProps {
     budget: number,
     usage: UsageCode,
     options: {
+      name: string;
       coolerType: "air" | "liquid";
       radiatorSize: "120" | "240" | "360";
       coolingProfile: "silent" | "performance";
@@ -263,6 +264,7 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
   const [caseFanPolicy, setCaseFanPolicy] = useState<"auto" | "silent" | "airflow">("auto");
   const [cpuVendor, setCpuVendor] = useState<"any" | "intel" | "amd">("any");
   const [buildPriority, setBuildPriority] = useState<"cost" | "spec">("cost");
+  const [configurationName, setConfigurationName] = useState("");
   const [selectedPresetIndex, setSelectedPresetIndex] = useState<number | null>(null);
   const previousBuildPriorityRef = useRef<"cost" | "spec">("cost");
   const [storagePreference, setStoragePreference] = useState<"ssd" | "hdd">("ssd");
@@ -376,6 +378,7 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
     event.preventDefault();
     const effectiveBudget = getEffectiveBudgetByPriority(budget);
     onSubmit(effectiveBudget, usage, {
+      name: configurationName.trim(),
       coolerType,
       radiatorSize,
       coolingProfile,
@@ -688,6 +691,17 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
     <div className="min-h-screen bg-slate-100 px-4 py-6">
       <div className="mx-auto max-w-4xl space-y-4">
         <form id="config-form" onSubmit={handleSubmit} className="space-y-4 rounded-xl border border-slate-300 bg-white p-5 pb-28">
+          <section className="space-y-3">
+            <h2 className="text-base font-semibold text-slate-900">保存名</h2>
+            <input
+              value={configurationName}
+              onChange={(event) => setConfigurationName(event.target.value)}
+              placeholder="例: 9800X3D + RX 7600 構成"
+              maxLength={120}
+              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none focus:border-blue-600"
+            />
+            <p className="text-xs text-slate-500">未入力でも保存できます。入力すると保存履歴の表示名に使われます。</p>
+          </section>
           <section className="space-y-3">
             <div className="flex items-center justify-between gap-3">
               <h2 className="text-base font-semibold text-slate-900">予算</h2>
