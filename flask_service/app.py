@@ -258,6 +258,7 @@ def create_app() -> Flask:
             payload.get("custom_budget_weights"),
             payload.get("min_storage_capacity_gb"),
             payload.get("max_motherboard_chipset"),
+            configuration_name=payload.get("name"),
         )
         if error_response:
             error_payload, status_code = _to_error_payload(error_response)

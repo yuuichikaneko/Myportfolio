@@ -296,6 +296,7 @@ class Configuration(models.Model):
         ('general', 'General'),
     ]
     
+    name = models.CharField(max_length=120, blank=True, default='', db_index=True)
     budget = models.IntegerField()
     usage = models.CharField(max_length=20, choices=USAGE_CHOICES)
     cpu = models.ForeignKey(PCPart, on_delete=models.SET_NULL, null=True, related_name='cfg_cpu')
@@ -318,7 +319,8 @@ class Configuration(models.Model):
         ordering = ['-created_at']
     
     def __str__(self):
-        return f"{self.get_usage_display()} - ¥{self.total_price}"
+        label = self.name.strip() or self.get_usage_display()
+        return f"{label} - ¥{self.total_price}"
 
     def soft_delete(self):
         self.is_deleted = True

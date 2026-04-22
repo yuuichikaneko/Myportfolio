@@ -26,6 +26,7 @@ vi.mock("./api", () => ({
 const savedConfigurationsFixture = [
   {
     id: 1,
+    name: "ゲーム優先",
     budget: 150000,
     usage: "gaming",
     usage_display: "Gaming",
@@ -45,6 +46,7 @@ const savedConfigurationsFixture = [
   },
   {
     id: 2,
+    name: "事務用省電力",
     budget: 90000,
     usage: "general",
     usage_display: "General",
@@ -147,15 +149,15 @@ describe("App history panel", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "保存履歴 2" }));
 
-    expect(screen.getByText("ゲーミングPC")).toBeInTheDocument();
-    expect(screen.getByText("汎用PC（事務・学習向け）")).toBeInTheDocument();
+    expect(screen.getByText("ゲーム優先")).toBeInTheDocument();
+    expect(screen.getByText("事務用省電力")).toBeInTheDocument();
 
     const usageFilter = screen.getAllByRole("combobox")[0];
     fireEvent.change(usageFilter, { target: { value: "gaming" } });
 
     await waitFor(() => {
-      expect(screen.getByText("ゲーミングPC")).toBeInTheDocument();
-      expect(screen.queryByText("汎用PC（事務・学習向け）")).not.toBeInTheDocument();
+      expect(screen.getByText("ゲーム優先")).toBeInTheDocument();
+      expect(screen.queryByText("事務用省電力")).not.toBeInTheDocument();
     });
   });
 
@@ -183,7 +185,7 @@ describe("App history panel", () => {
     await screen.findByRole("button", { name: "保存履歴 2" });
     await userEvent.click(screen.getByRole("button", { name: "保存履歴 2" }));
 
-    const gamingCard = screen.getByText("ゲーミングPC").closest("div.w-full.text-left.border");
+    const gamingCard = screen.getByText("ゲーム優先").closest("div.w-full.text-left.border");
     expect(gamingCard).toBeTruthy();
     await userEvent.click(within(gamingCard as HTMLElement).getByRole("button", { name: "削除" }));
 
@@ -228,24 +230,51 @@ describe("App history panel", () => {
     await userEvent.type(queryInput, "82000");
 
     await waitFor(() => {
-      expect(screen.queryByText("ゲーミングPC")).not.toBeInTheDocument();
-      expect(screen.getByText("汎用PC（事務・学習向け）")).toBeInTheDocument();
+      expect(screen.queryByText("ゲーム優先")).not.toBeInTheDocument();
+      expect(screen.getByText("事務用省電力")).toBeInTheDocument();
     });
 
     await userEvent.clear(queryInput);
     await userEvent.type(queryInput, "id 1");
 
     await waitFor(() => {
-      expect(screen.getByText("ゲーミングPC")).toBeInTheDocument();
-      expect(screen.queryByText("汎用PC（事務・学習向け）")).not.toBeInTheDocument();
+      expect(screen.getByText("ゲーム優先")).toBeInTheDocument();
+      expect(screen.queryByText("事務用省電力")).not.toBeInTheDocument();
     });
 
     await userEvent.clear(queryInput);
     await userEvent.type(queryInput, "general");
 
     await waitFor(() => {
-      expect(screen.queryByText("ゲーミングPC")).not.toBeInTheDocument();
-      expect(screen.getByText("汎用PC（事務・学習向け）")).toBeInTheDocument();
+      expect(screen.queryByText("ゲーム優先")).not.toBeInTheDocument();
+      expect(screen.getByText("事務用省電力")).toBeInTheDocument();
+    });
+  });
+
+  it("shows saved configuration name as primary label", async () => {
+    render(<App />);
+
+    await screen.findByRole("button", { name: "保存履歴 2" });
+    await userEvent.click(screen.getByRole("button", { name: "保存履歴 2" }));
+
+    expect(screen.getByText("ゲーム優先")).toBeInTheDocument();
+    expect(screen.getByText("事務用省電力")).toBeInTheDocument();
+  });
+
+  it("matches history search query against saved configuration name", async () => {
+    render(<App />);
+
+    await screen.findByRole("button", { name: "保存履歴 2" });
+    await userEvent.click(screen.getByRole("button", { name: "保存履歴 2" }));
+
+    const queryInput = screen.getByPlaceholderText("ID・パーツ名・金額で検索");
+
+    await userEvent.clear(queryInput);
+    await userEvent.type(queryInput, "事務用省電力");
+
+    await waitFor(() => {
+      expect(screen.getByText("事務用省電力")).toBeInTheDocument();
+      expect(screen.queryByText("ゲーム優先")).not.toBeInTheDocument();
     });
   });
 
@@ -264,8 +293,8 @@ describe("App history panel", () => {
     await userEvent.type(queryInput, "140000");
 
     await waitFor(() => {
-      expect(screen.queryByText("ゲーミングPC")).not.toBeInTheDocument();
-      expect(screen.queryByText("汎用PC（事務・学習向け）")).not.toBeInTheDocument();
+      expect(screen.queryByText("ゲーム優先")).not.toBeInTheDocument();
+      expect(screen.queryByText("事務用省電力")).not.toBeInTheDocument();
       expect(screen.getByText("条件に一致する保存済み構成はありません。")).toBeInTheDocument();
     });
 
@@ -273,8 +302,8 @@ describe("App history panel", () => {
     await userEvent.type(queryInput, "82000");
 
     await waitFor(() => {
-      expect(screen.queryByText("ゲーミングPC")).not.toBeInTheDocument();
-      expect(screen.getByText("汎用PC（事務・学習向け）")).toBeInTheDocument();
+      expect(screen.queryByText("ゲーム優先")).not.toBeInTheDocument();
+      expect(screen.getByText("事務用省電力")).toBeInTheDocument();
     });
   });
 
@@ -284,7 +313,7 @@ describe("App history panel", () => {
     await screen.findByRole("button", { name: "保存履歴 2" });
     await userEvent.click(screen.getByRole("button", { name: "保存履歴 2" }));
 
-    const gamingCard = screen.getByText("ゲーミングPC").closest("div.w-full.text-left.border");
+    const gamingCard = screen.getByText("ゲーム優先").closest("div.w-full.text-left.border");
     expect(gamingCard).toBeTruthy();
     await userEvent.click(within(gamingCard as HTMLElement).getByRole("button", { name: "詳細を開く" }));
 

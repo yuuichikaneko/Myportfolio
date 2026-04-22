@@ -4207,7 +4207,7 @@ def _pick_part_by_target(part_type, budget, usage, weights_override=None, option
         if part_type == 'cpu' and usage == 'gaming':
             amd_within_target = [p for p in within_target if _is_cpu_vendor_match(p, 'amd')]
             cpu_pool = amd_within_target or within_target
-            picked_cpu = _pick_amd_gaming_cpu(cpu_pool, build_priority)
+            picked_cpu = _pick_amd_gaming_cpu(cpu_pool, build_priority, require_x3d=require_gaming_x3d_cpu)
             if picked_cpu:
                 return picked_cpu
         if part_type == 'cpu' and usage == 'creator':
@@ -4370,12 +4370,12 @@ def _pick_part_by_target(part_type, budget, usage, weights_override=None, option
         if profiled:
             return profiled
 
-    if part_type == 'cpu' and usage == 'gaming':
-        amd_candidates = [p for p in candidates if _is_cpu_vendor_match(p, 'amd')]
-        cpu_pool = amd_candidates or candidates
-        picked_cpu = _pick_amd_gaming_cpu(cpu_pool, build_priority, require_x3d=require_gaming_x3d_cpu)
-        if picked_cpu:
-            return picked_cpu
+        if part_type == 'cpu' and usage == 'gaming':
+            amd_candidates = [p for p in candidates if _is_cpu_vendor_match(p, 'amd')]
+            cpu_pool = candidates if require_gaming_x3d_cpu else (amd_candidates or candidates)
+            picked_cpu = _pick_amd_gaming_cpu(cpu_pool, build_priority, require_x3d=require_gaming_x3d_cpu)
+            if picked_cpu:
+                return picked_cpu
 
     if part_type == 'cpu' and usage == 'creator':
         # クリエイター用途: 目標価格を超えた候補からもコアスレッド数で優先
@@ -4516,7 +4516,8 @@ def _pick_part_by_target(part_type, budget, usage, weights_override=None, option
             if non_excluded:
                 return sorted(non_excluded, key=lambda p: (p.price, -_infer_gaming_gpu_perf_score(p)))[0]
         if build_priority == 'cost':
-            return within_target[0]
+            if not (part_type == 'cpu' and usage == 'gaming' and require_gaming_x3d_cpu):
+                return within_target[0]
         if part_type == 'cpu_cooler':
             # creator 用途: 水冷またはツインタワー空冷を優先
             if usage == 'creator':
@@ -4547,7 +4548,7 @@ def _pick_part_by_target(part_type, budget, usage, weights_override=None, option
     if build_priority == 'cost':
         if part_type == 'cpu' and usage == 'gaming':
             amd_candidates = [p for p in candidates if _is_cpu_vendor_match(p, 'amd')]
-            cpu_pool = amd_candidates or candidates
+            cpu_pool = candidates if require_gaming_x3d_cpu else (amd_candidates or candidates)
             picked_cpu = _pick_amd_gaming_cpu(cpu_pool, 'cost', require_x3d=require_gaming_x3d_cpu)
             if picked_cpu:
                 return picked_cpu
@@ -7773,6 +7774,8 @@ def _enforce_memory_speed_floor(selected_parts, budget, usage, options=None):
 def _prefer_non_x3d_cpu_when_possible(selected_parts, budget, usage, options=None):
     """現在CPUがX3Dの場合、可能なら非X3Dへ置換する（置換不能なら現状維持）。"""
     options = options or {}
+    if usage == 'gaming' and options.get('require_gaming_x3d_cpu'):
+        return selected_parts, False
     current_cpu = selected_parts.get('cpu')
     if not current_cpu or not _is_cpu_x3d(current_cpu):
         return selected_parts, False
@@ -7914,6 +7917,7 @@ def build_configuration_response(
     auto_adjust_reference_budget=None,
     require_gaming_x3d_cpu=False,
     duplicate_retry_count=0,
+    configuration_name=None,
 ):
     if not isinstance(budget, int) or budget < 50000 or budget > 1500000:
         return None, Response({'detail': 'budgetは50,000円以上1,500,000円以下で入力してください'}, status=status.HTTP_400_BAD_REQUEST)
@@ -7957,6 +7961,7 @@ def build_configuration_response(
             auto_adjust_reference_budget=auto_adjust_reference_budget,
             require_gaming_x3d_cpu=require_gaming_x3d_cpu,
             duplicate_retry_count=duplicate_retry_count,
+            configuration_name=configuration_name,
         )
         if fallback_error:
             return None, fallback_error
@@ -7996,6 +8001,7 @@ def build_configuration_response(
             auto_adjust_reference_budget=auto_adjust_reference_budget,
             require_gaming_x3d_cpu=require_gaming_x3d_cpu,
             duplicate_retry_count=duplicate_retry_count,
+            configuration_name=configuration_name,
         )
         if fallback_error:
             return None, fallback_error
@@ -8047,8 +8053,8 @@ def build_configuration_response(
         pass  # X3D 強制ではなく、_prefer_higher_gaming_cost_x3d_cpu の後段処理で prefer する
     if require_gaming_x3d_cpu:
         selection_options['require_gaming_x3d_cpu'] = True
-    # gaming + cost では X3D CPU を強制しない（遅い検索処理を回避）
-    if usage == 'gaming' and selection_options.get('build_priority') == 'cost':
+    # gaming + cost でも、明示的に X3D 必須が指定されたときは強制を維持する。
+    if usage == 'gaming' and selection_options.get('build_priority') == 'cost' and not require_gaming_x3d_cpu:
         selection_options['require_gaming_x3d_cpu'] = False
     elif require_gaming_x3d_cpu:
         selection_options['require_gaming_x3d_cpu'] = True
@@ -8690,6 +8696,7 @@ def build_configuration_response(
                     persist=persist,
                     auto_adjust_reference_budget=requested_budget,
                     require_gaming_x3d_cpu=True,
+                    configuration_name=configuration_name,
                 )
                 if adjusted_error:
                     continue
@@ -8957,9 +8964,11 @@ def build_configuration_response(
                     auto_adjust_reference_budget=auto_adjust_reference_budget,
                     require_gaming_x3d_cpu=require_gaming_x3d_cpu,
                     duplicate_retry_count=duplicate_retry_count + 1,
+                    configuration_name=configuration_name,
                 )
 
         configuration = Configuration.objects.create(
+            name=str(configuration_name or '').strip(),
             budget=effective_budget,
             usage=usage,
             total_price=total_price,
@@ -8975,6 +8984,7 @@ def build_configuration_response(
             psu=selected_parts.get('psu'),
             case=selected_parts.get('case'),
         ) if use_igpu else Configuration.objects.create(
+            name=str(configuration_name or '').strip(),
             budget=effective_budget,
             usage=usage,
             total_price=total_price,
@@ -9162,6 +9172,7 @@ class ConfigurationViewSet(viewsets.ModelViewSet):
             request.data.get('custom_budget_weights'),
             request.data.get('min_storage_capacity_gb'),
             request.data.get('max_motherboard_chipset'),
+            configuration_name=request.data.get('name'),
         )
         if error_response:
             error_response['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
@@ -9213,6 +9224,7 @@ class GenerateConfigAPIView(APIView):
             request.data.get('min_storage_capacity_gb'),
             request.data.get('max_motherboard_chipset'),
             enforce_gaming_x3d=enforce_x3d,
+            configuration_name=request.data.get('name'),
         )
         if error_response:
             error_response['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
