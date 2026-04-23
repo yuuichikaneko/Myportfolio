@@ -94,7 +94,7 @@ npm run dev
 ### バックエンド（FastAPI）
 ```bash
 cd F:\Python\Myportfolio_FastAPI\backend
-python -m uvicorn app.main:app --reload
+py -3.12 -m uvicorn app.main:app --reload
 ```
 `http://localhost:8000` で起動
 

@@ -90,20 +90,20 @@ const RADIATOR_OPTIONS = [
 ] as const;
 
 const COOLING_PROFILE_OPTIONS = [
-  { value: "silent", label: "静音重視" },
-  { value: "performance", label: "冷却重視" },
+  { value: "silent", label: "静音重視", desc: "低回転・静音ファン構成。音を抑えたい方向け" },
+  { value: "performance", label: "冷却重視", desc: "高回転・冷却効率優先。オーバークロックや高負荷用途向け" },
 ] as const;
 
 const CASE_SIZE_OPTIONS = [
-  { value: "mini", label: "コンパクト" },
-  { value: "mid", label: "ミドル" },
-  { value: "full", label: "フルサイズ" },
+  { value: "mini", label: "コンパクト", desc: "小型・省スペース。CPUクーラー高・ラジエーター寸法に制約あり" },
+  { value: "mid", label: "ミドル", desc: "最もバランスの取れたサイズ。拡張性と置き場所を両立" },
+  { value: "full", label: "フルサイズ", desc: "拡張性・エアフロー最優先。大型クーラー・多数ドライブ対応" },
 ] as const;
 
 const CASE_FAN_POLICY_OPTIONS = [
-  { value: "auto", label: "自動" },
-  { value: "silent", label: "静音重視" },
-  { value: "airflow", label: "冷却重視" },
+  { value: "auto", label: "自動", desc: "用途・ケースサイズに応じてファン構成を自動選択" },
+  { value: "silent", label: "静音重視", desc: "低騒音ファンを優先。静かな環境向け" },
+  { value: "airflow", label: "冷却重視", desc: "高エアフロー構成。長時間負荷・高発熱環境向け" },
 ] as const;
 
 const CPU_VENDOR_OPTIONS = [
@@ -288,6 +288,8 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
   const [popupMessage, setPopupMessage] = useState<string | null>(null);
   const [activeUsageTooltip, setActiveUsageTooltip] = useState<string | null>(null);
   const [activeCoolerTooltip, setActiveCoolerTooltip] = useState<string | null>(null);
+  const [activeCoolingGridTooltip, setActiveCoolingGridTooltip] = useState<{ key: string; desc: string } | null>(null);
+  const [coolingGridTooltipPos, setCoolingGridTooltipPos] = useState({ x: 0, y: 0 });
   const budgetMin = 50000;
   const budgetMax = 1500000;
 
@@ -731,6 +733,7 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
               </>
             )}
             <div>
+              <p className="mb-1 text-xs text-slate-400">スライダーを左右にドラッグすると金額を変更できます</p>
               <input
                 type="range"
                 aria-label="予算スライダー"
@@ -750,6 +753,7 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
                 <span className="font-semibold text-slate-700">{`現在: ¥${Math.min(budgetMax, Math.max(budgetMin, budget)).toLocaleString("ja-JP")}`}</span>
                 <span>{`¥${budgetMax.toLocaleString("ja-JP")}`}</span>
               </div>
+
             </div>
             <div className="relative">
               <span
@@ -761,11 +765,9 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
               <input
                 type="number"
                 value={budget}
-                onFocus={() => setPopupMessage(`入力範囲: ¥${budgetMin.toLocaleString("ja-JP")} - ¥${budgetMax.toLocaleString("ja-JP")}`)}
                 onChange={(e) => {
                   setBudget(Number(e.target.value));
                   setSelectedPresetIndex(null);
-                  setPopupMessage(`入力範囲: ¥${budgetMin.toLocaleString("ja-JP")} - ¥${budgetMax.toLocaleString("ja-JP")}`);
                 }}
                 min={50000}
                 max={1500000}
@@ -1054,7 +1056,15 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
                 <p className="mb-2 text-sm font-medium text-slate-800">クーラー方針</p>
                 <div className="grid grid-cols-2 gap-2">
                   {COOLING_PROFILE_OPTIONS.map((option) => (
-                    <button key={option.value} type="button" onClick={() => setCoolingProfile(option.value as "silent" | "performance")} className={segmentButtonClass(coolingProfile === option.value)}>
+                    <button
+                      key={option.value}
+                      type="button"
+                      onClick={() => setCoolingProfile(option.value as "silent" | "performance")}
+                      onMouseEnter={(e) => { setActiveCoolingGridTooltip({ key: `coolingProfile_${option.value}`, desc: option.desc }); setCoolingGridTooltipPos({ x: e.clientX, y: e.clientY }); }}
+                      onMouseLeave={() => setActiveCoolingGridTooltip(null)}
+                      onMouseMove={(e) => setCoolingGridTooltipPos({ x: e.clientX, y: e.clientY })}
+                      className={segmentButtonClass(coolingProfile === option.value)}
+                    >
                       {option.label}
                     </button>
                   ))}
@@ -1064,7 +1074,15 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
                 <p className="mb-2 text-sm font-medium text-slate-800">ケースサイズ</p>
                 <div className="grid grid-cols-3 gap-2">
                   {CASE_SIZE_OPTIONS.map((option) => (
-                    <button key={option.value} type="button" onClick={() => setCaseSize(option.value as "mini" | "mid" | "full")} className={segmentButtonClass(caseSize === option.value)}>
+                    <button
+                      key={option.value}
+                      type="button"
+                      onClick={() => setCaseSize(option.value as "mini" | "mid" | "full")}
+                      onMouseEnter={(e) => { setActiveCoolingGridTooltip({ key: `caseSize_${option.value}`, desc: option.desc }); setCoolingGridTooltipPos({ x: e.clientX, y: e.clientY }); }}
+                      onMouseLeave={() => setActiveCoolingGridTooltip(null)}
+                      onMouseMove={(e) => setCoolingGridTooltipPos({ x: e.clientX, y: e.clientY })}
+                      className={segmentButtonClass(caseSize === option.value)}
+                    >
                       {option.label}
                     </button>
                   ))}
@@ -1078,6 +1096,9 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
                       key={option.value}
                       type="button"
                       onClick={() => setCaseFanPolicy(option.value as "auto" | "silent" | "airflow")}
+                      onMouseEnter={(e) => { setActiveCoolingGridTooltip({ key: `caseFan_${option.value}`, desc: option.desc }); setCoolingGridTooltipPos({ x: e.clientX, y: e.clientY }); }}
+                      onMouseLeave={() => setActiveCoolingGridTooltip(null)}
+                      onMouseMove={(e) => setCoolingGridTooltipPos({ x: e.clientX, y: e.clientY })}
                       className={segmentButtonClass(caseFanPolicy === option.value)}
                     >
                       {option.label}
@@ -1086,6 +1107,15 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
                 </div>
               </div>
             </div>
+
+            {activeCoolingGridTooltip && (
+              <div
+                className="pointer-events-none fixed z-50 rounded-md border border-blue-200 bg-white px-3 py-1 text-xs font-medium text-blue-800 shadow-md"
+                style={{ left: coolingGridTooltipPos.x + 14, top: coolingGridTooltipPos.y - 36 }}
+              >
+                {activeCoolingGridTooltip.desc}
+              </div>
+            )}
 
             {(caseSize === "mini" || caseSize === "mid") && (
               <p className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800">

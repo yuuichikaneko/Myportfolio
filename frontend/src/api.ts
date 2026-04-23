@@ -98,6 +98,7 @@ export interface PartAdjustmentResponse {
  * 選択した用途コード、合計金額、構成パーツ一覧を返す。
  */
 export interface GenerateConfigResponse {
+  name?: string;
   usage: UsageCode;
   budget: number;
   budget_tier?: "low" | "middle" | "high" | "premium";

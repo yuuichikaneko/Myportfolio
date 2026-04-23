@@ -9002,6 +9002,7 @@ def build_configuration_response(
         )
 
     response_data = {
+        'name': str(configuration_name or '').strip(),
         'usage': usage,
         'budget': effective_budget,
         'budget_tier': _classify_budget_tier(effective_budget),
