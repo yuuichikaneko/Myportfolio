@@ -107,14 +107,14 @@ const CASE_FAN_POLICY_OPTIONS = [
 ] as const;
 
 const CPU_VENDOR_OPTIONS = [
-  { value: "any", label: "こだわらない" },
-  { value: "intel", label: "Intel" },
-  { value: "amd", label: "AMD" },
+  { value: "any", label: "こだわらない", desc: "AMD・Intelを問わずコスパ優先で最適選択" },
+  { value: "intel", label: "Intel", desc: "Intel CPUを優先。シングルスレッド性能重視の用途に強い" },
+  { value: "amd", label: "AMD", desc: "AMD CPUを優先。多コア・コスパが高くゲーミングに人気" },
 ] as const;
 
 const BUILD_PRIORITY_OPTIONS = [
-  { value: "cost", label: "コスト重視" },
-  { value: "spec", label: "スペック重視" },
+  { value: "cost", label: "コスト重視", desc: "予算内で最大のコスパを目指す構成" },
+  { value: "spec", label: "スペック重視", desc: "表示予算に20%上乗せして高スペックな構成を優先" },
 ] as const;
 
 const STORAGE_PREFERENCE_OPTIONS = [
@@ -810,19 +810,30 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
               ))}
             </div>
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-              {presets.map((preset, index) => (
-                <button
-                  key={preset.label}
-                  type="button"
-                  onClick={() => {
-                    setBudget(preset.value);
-                    setSelectedPresetIndex(index);
-                  }}
-                  className={segmentButtonClass(selectedPresetIndex === index)}
-                >
-                  {preset.label}
-                </button>
-              ))}
+              {presets.map((preset, index) => {
+                const presetDescs: Record<string, string> = {
+                  "ローエンド": "コスパ重視の基本構成。必要十分なスペックを満たす",
+                  "ミドル": "スペックと価格のバランスが良いスタンダード構成",
+                  "ハイエンド": "高パフォーマンス構成。要求の高い作業・ゲームに対応",
+                  "プレミアム": "最高構成。プロ用途・最高圧のゲーム環境向け",
+                };
+                return (
+                  <button
+                    key={preset.label}
+                    type="button"
+                    onClick={() => {
+                      setBudget(preset.value);
+                      setSelectedPresetIndex(index);
+                    }}
+                    onMouseEnter={(e) => { setActiveCoolingGridTooltip({ key: `preset_${preset.label}`, desc: presetDescs[preset.label] ?? "" }); setCoolingGridTooltipPos({ x: e.clientX, y: e.clientY }); }}
+                    onMouseLeave={() => setActiveCoolingGridTooltip(null)}
+                    onMouseMove={(e) => setCoolingGridTooltipPos({ x: e.clientX, y: e.clientY })}
+                    className={segmentButtonClass(selectedPresetIndex === index)}
+                  >
+                    {preset.label}
+                  </button>
+                );
+              })}
             </div>
           </section>
 
@@ -833,7 +844,15 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
                 <p className="mb-2 text-sm font-medium text-slate-800">CPUメーカー</p>
                 <div className="grid grid-cols-3 gap-2">
                   {CPU_VENDOR_OPTIONS.map((option) => (
-                    <button key={option.value} type="button" onClick={() => setCpuVendor(option.value as "any" | "intel" | "amd")} className={segmentButtonClass(cpuVendor === option.value)}>
+                    <button
+                      key={option.value}
+                      type="button"
+                      onClick={() => setCpuVendor(option.value as "any" | "intel" | "amd")}
+                      onMouseEnter={(e) => { setActiveCoolingGridTooltip({ key: `cpuVendor_${option.value}`, desc: option.desc }); setCoolingGridTooltipPos({ x: e.clientX, y: e.clientY }); }}
+                      onMouseLeave={() => setActiveCoolingGridTooltip(null)}
+                      onMouseMove={(e) => setCoolingGridTooltipPos({ x: e.clientX, y: e.clientY })}
+                      className={segmentButtonClass(cpuVendor === option.value)}
+                    >
                       {option.label}
                     </button>
                   ))}
@@ -848,6 +867,9 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
                       type="button"
                       disabled={isLoading || (useCustomBudgetWeights && customBudgetWeightTotal <= 0)}
                       onClick={() => setBuildPriority(option.value as "cost" | "spec")}
+                      onMouseEnter={(e) => { setActiveCoolingGridTooltip({ key: `buildPriority_${option.value}`, desc: option.desc }); setCoolingGridTooltipPos({ x: e.clientX, y: e.clientY }); }}
+                      onMouseLeave={() => setActiveCoolingGridTooltip(null)}
+                      onMouseMove={(e) => setCoolingGridTooltipPos({ x: e.clientX, y: e.clientY })}
                       className={`${segmentButtonClass(buildPriority === option.value)} disabled:cursor-not-allowed disabled:opacity-50`}
                     >
                       {option.label}
@@ -891,13 +913,12 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
                           setStorage2CapacityGb(null);
                           setStorage2ProductId(null);
                         }}
-                        title={option.desc}
-                        className={`${segmentButtonClass(storagePreference2 === option.value)} group relative`}
+                        onMouseEnter={(e) => { setActiveCoolingGridTooltip({ key: `storage2_${option.value}`, desc: option.desc }); setCoolingGridTooltipPos({ x: e.clientX, y: e.clientY }); }}
+                        onMouseLeave={() => setActiveCoolingGridTooltip(null)}
+                        onMouseMove={(e) => setCoolingGridTooltipPos({ x: e.clientX, y: e.clientY })}
+                        className={segmentButtonClass(storagePreference2 === option.value)}
                       >
-                        <span className="block">{option.label}</span>
-                        <span className="pointer-events-none absolute -top-12 left-1/2 z-30 w-64 -translate-x-1/2 rounded-md border border-blue-200 bg-white px-2 py-1 text-[11px] font-normal text-blue-800 opacity-0 shadow-md transition group-hover:opacity-100 group-focus-visible:opacity-100">
-                          {option.desc}
-                        </span>
+                        {option.label}
                       </button>
                     ))}
                   </div>
@@ -951,13 +972,12 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
                           setStorage3CapacityGb(null);
                           setStorage3ProductId(null);
                         }}
-                        title={option.desc}
-                        className={`${segmentButtonClass(storagePreference3 === option.value)} group relative`}
+                        onMouseEnter={(e) => { setActiveCoolingGridTooltip({ key: `storage3_${option.value}`, desc: option.desc }); setCoolingGridTooltipPos({ x: e.clientX, y: e.clientY }); }}
+                        onMouseLeave={() => setActiveCoolingGridTooltip(null)}
+                        onMouseMove={(e) => setCoolingGridTooltipPos({ x: e.clientX, y: e.clientY })}
+                        className={segmentButtonClass(storagePreference3 === option.value)}
                       >
-                        <span className="block">{option.label}</span>
-                        <span className="pointer-events-none absolute -top-12 left-1/2 z-30 w-64 -translate-x-1/2 rounded-md border border-blue-200 bg-white px-2 py-1 text-[11px] font-normal text-blue-800 opacity-0 shadow-md transition group-hover:opacity-100 group-focus-visible:opacity-100">
-                          {option.desc}
-                        </span>
+                        {option.label}
                       </button>
                     ))}
                   </div>
@@ -1011,31 +1031,33 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
 
             <div className="space-y-2">
               <p className="text-sm font-medium text-slate-800">CPUクーラー方式</p>
-              {COOLER_OPTIONS.map((option) => (
-                <label
-                  key={option.value}
-                  className={`relative block rounded-lg border p-3 ${coolerType === option.value ? "border-blue-700 bg-blue-50" : "border-slate-300"}`}
-                  onMouseEnter={() => setActiveCoolerTooltip(option.value)}
-                  onMouseLeave={() => setActiveCoolerTooltip((current) => (current === option.value ? null : current))}
-                >
-                  <input
-                    type="radio"
-                    name="coolerType"
-                    value={option.value}
-                    checked={coolerType === option.value}
-                    onChange={(e) => setCoolerType(e.target.value as "air" | "liquid")}
-                    onFocus={() => setActiveCoolerTooltip(option.value)}
-                    onBlur={() => setActiveCoolerTooltip((current) => (current === option.value ? null : current))}
-                    className="mr-2"
-                  />
-                  <span className="font-medium text-slate-900">{option.label}</span>
-                  {activeCoolerTooltip === option.value && (
-                    <span className="pointer-events-none absolute -top-11 left-1/2 z-30 w-max max-w-[90%] -translate-x-1/2 rounded-md border border-blue-200 bg-white px-3 py-1 text-xs font-medium text-blue-800 shadow-md">
-                      {option.desc}
-                    </span>
-                  )}
-                </label>
-              ))}
+              <div className="grid grid-cols-2 gap-2">
+                {COOLER_OPTIONS.map((option) => (
+                  <label
+                    key={option.value}
+                    className={`relative block rounded-lg border p-3 ${coolerType === option.value ? "border-blue-700 bg-blue-50" : "border-slate-300"}`}
+                    onMouseEnter={() => setActiveCoolerTooltip(option.value)}
+                    onMouseLeave={() => setActiveCoolerTooltip((current) => (current === option.value ? null : current))}
+                  >
+                    <input
+                      type="radio"
+                      name="coolerType"
+                      value={option.value}
+                      checked={coolerType === option.value}
+                      onChange={(e) => setCoolerType(e.target.value as "air" | "liquid")}
+                      onFocus={() => setActiveCoolerTooltip(option.value)}
+                      onBlur={() => setActiveCoolerTooltip((current) => (current === option.value ? null : current))}
+                      className="mr-2"
+                    />
+                    <span className="font-medium text-slate-900">{option.label}</span>
+                    {activeCoolerTooltip === option.value && (
+                      <span className="pointer-events-none absolute -top-11 left-1/2 z-30 w-max max-w-[90%] -translate-x-1/2 rounded-md border border-blue-200 bg-white px-3 py-1 text-xs font-medium text-blue-800 shadow-md">
+                        {option.desc}
+                      </span>
+                    )}
+                  </label>
+                ))}
+              </div>
             </div>
 
             {coolerType === "liquid" && (
