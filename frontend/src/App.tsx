@@ -203,6 +203,7 @@ function App() {
         storage3_part_id: options.storage3PartId ?? undefined,
         os_edition: options.osEdition,
         custom_budget_weights: options.useCustomBudgetWeights ? options.customBudgetWeights : undefined,
+        cpu_part_id: options.cpuPartId ?? undefined,
       });
       setResult(response);
       setSelectedSavedConfig(null);

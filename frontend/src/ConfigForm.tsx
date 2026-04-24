@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   getMarketPriceRange,
+  getPartsByType,
   getPartPriceRanges,
   getStorageInventory,
   type UsageCode,
   type CustomBudgetWeights,
   type PartPriceRange,
+  type SavedPartResponse,
   type StorageInventoryResponse,
 } from "./api";
 
@@ -42,6 +44,7 @@ interface ConfigFormProps {
       osEdition: "auto" | "home" | "pro";
       useCustomBudgetWeights: boolean;
       customBudgetWeights: CustomBudgetWeights;
+      cpuPartId: number | null;
     }
   ) => void;
   isLoading: boolean;
@@ -108,8 +111,8 @@ const CASE_FAN_POLICY_OPTIONS = [
 
 const CPU_VENDOR_OPTIONS = [
   { value: "any", label: "こだわらない", desc: "AMD・Intelを問わずコスパ優先で最適選択" },
-  { value: "intel", label: "Intel", desc: "Intel CPUを優先。シングルスレッド性能重視の用途に強い" },
-  { value: "amd", label: "AMD", desc: "AMD CPUを優先。多コア・コスパが高くゲーミングに人気" },
+  { value: "intel", label: "Intel", desc: "Intel CPUを優先。CPUを直接指定した場合、対応ソケットのマザーボードが自動で選び直されます。" },
+  { value: "amd", label: "AMD", desc: "AMD CPUを優先。CPUを直接指定した場合、対応ソケットのマザーボードが自動で選び直されます。" },
 ] as const;
 
 const BUILD_PRIORITY_OPTIONS = [
@@ -264,6 +267,9 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
   const [caseFanPolicy, setCaseFanPolicy] = useState<"auto" | "silent" | "airflow">("auto");
   const [cpuVendor, setCpuVendor] = useState<"any" | "intel" | "amd">("any");
   const [buildPriority, setBuildPriority] = useState<"cost" | "spec">("cost");
+  const [selectedCpuPartId, setSelectedCpuPartId] = useState<number | null>(null);
+  const [cpuList, setCpuList] = useState<SavedPartResponse[]>([]);
+  const [cpuListLoading, setCpuListLoading] = useState(true);
   const [configurationName, setConfigurationName] = useState("");
   const [selectedPresetIndex, setSelectedPresetIndex] = useState<number | null>(null);
   const previousBuildPriorityRef = useRef<"cost" | "spec">("cost");
@@ -339,6 +345,21 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
   }, []);
 
   useEffect(() => {
+    const loadCpuList = async () => {
+      setCpuListLoading(true);
+      try {
+        const parts = await getPartsByType("cpu");
+        setCpuList(parts);
+      } catch {
+        setCpuList([]);
+      } finally {
+        setCpuListLoading(false);
+      }
+    };
+    loadCpuList();
+  }, []);
+
+  useEffect(() => {
     const loadStorageInventory = async () => {
       try {
         const inventory = await getStorageInventory();
@@ -358,6 +379,15 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
       setBudget(Math.max(0, marketRange.min - 15000));
     }
   }, [usage, marketRange.min]);
+
+  useEffect(() => {
+    // CPUメーカーが変わったとき、選択済みCPUがそのメーカーに属さなければリセット
+    if (selectedCpuPartId === null) return;
+    const current = cpuList.find((c) => c.id === selectedCpuPartId);
+    if (!current) return;
+    if (cpuVendor === "amd" && !/ryzen|amd/i.test(current.name)) setSelectedCpuPartId(null);
+    if (cpuVendor === "intel" && !/intel|core\s*i/i.test(current.name)) setSelectedCpuPartId(null);
+  }, [cpuVendor, cpuList, selectedCpuPartId]);
 
   useEffect(() => {
     if (!popupMessage) {
@@ -395,6 +425,7 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
       osEdition,
       useCustomBudgetWeights,
       customBudgetWeights,
+      cpuPartId: selectedCpuPartId,
     });
   };
 
@@ -404,6 +435,14 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
   );
 
   const effectiveBudget = useMemo(() => getEffectiveBudgetByPriority(budget), [budget]);
+
+  const filteredCpuList = useMemo(() => {
+    return cpuList.filter((cpu) => {
+      if (cpuVendor === "amd") return /ryzen|amd/i.test(cpu.name);
+      if (cpuVendor === "intel") return /intel|core\s*i/i.test(cpu.name);
+      return true;
+    }).sort((a, b) => b.price - a.price);
+  }, [cpuList, cpuVendor]);
 
   const customBudgetWeightAmounts = useMemo(() => {
     return CUSTOM_BUDGET_WEIGHT_FIELDS.reduce((acc, field) => {
@@ -857,16 +896,71 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
                     <button
                       key={option.value}
                       type="button"
-                      onClick={() => setCpuVendor(option.value as "any" | "intel" | "amd")}
+                      onClick={() => {
+                        setCpuVendor(option.value as "any" | "intel" | "amd");
+                        if (option.value === "any") setSelectedCpuPartId(null);
+                      }}
                       onMouseEnter={(e) => { setActiveCoolingGridTooltip({ key: `cpuVendor_${option.value}`, desc: option.desc }); setCoolingGridTooltipPos({ x: e.clientX, y: e.clientY }); }}
                       onMouseLeave={() => setActiveCoolingGridTooltip(null)}
                       onMouseMove={(e) => setCoolingGridTooltipPos({ x: e.clientX, y: e.clientY })}
                       className={segmentButtonClass(cpuVendor === option.value)}
                     >
-                      {option.label}
+                      {option.value !== "any" && cpuVendor === option.value
+                        ? `${option.label} ▲`
+                        : option.value !== "any"
+                        ? `${option.label} ▼`
+                        : option.label}
                     </button>
                   ))}
                 </div>
+
+                {/* アコーディオン: Intel/AMD 選択時に展開 */}
+                {cpuVendor !== "any" && (
+                  <div className="mt-2 rounded-md border border-slate-200 bg-slate-50 overflow-hidden">
+                    {cpuListLoading ? (
+                      <p className="px-3 py-2 text-xs text-slate-400">読み込み中...</p>
+                    ) : filteredCpuList.length === 0 ? (
+                      <p className="px-3 py-2 text-xs text-slate-400">該当CPUがありません</p>
+                    ) : (
+                      <ul className="max-h-48 overflow-y-auto divide-y divide-slate-100">
+                        <li>
+                          <button
+                            type="button"
+                            onClick={() => setSelectedCpuPartId(null)}
+                            className={`w-full px-3 py-2 text-left text-xs transition-colors ${
+                              selectedCpuPartId === null
+                                ? "bg-blue-50 font-semibold text-blue-700"
+                                : "text-slate-500 hover:bg-slate-100"
+                            }`}
+                          >
+                            自動選定（おまかせ）
+                          </button>
+                        </li>
+                        {filteredCpuList.map((cpu) => (
+                          <li key={cpu.id}>
+                            <button
+                              type="button"
+                              onClick={() => setSelectedCpuPartId(cpu.id)}
+                              className={`w-full px-3 py-2 text-left text-xs transition-colors ${
+                                selectedCpuPartId === cpu.id
+                                  ? "bg-blue-50 font-semibold text-blue-700"
+                                  : "text-slate-700 hover:bg-slate-100"
+                              }`}
+                            >
+                              <span className="block truncate">{cpu.name}</span>
+                              <span className="text-slate-400">¥{cpu.price.toLocaleString("ja-JP")}</span>
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    {selectedCpuPartId && (
+                      <p className="border-t border-amber-100 bg-amber-50 px-3 py-1.5 text-xs text-amber-600">
+                        ⚠️ このCPUを指定すると、ソケット互換のマザーボードが自動で選び直されます。意図しないマザーボードになる場合は「自動選定」に戻してください。
+                      </p>
+                    )}
+                  </div>
+                )}
               </div>
               <div>
                 <p className="mb-2 text-sm font-medium text-slate-800">ビルド優先度</p>
