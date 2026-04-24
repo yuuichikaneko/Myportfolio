@@ -7774,6 +7774,8 @@ def _enforce_memory_speed_floor(selected_parts, budget, usage, options=None):
 def _prefer_non_x3d_cpu_when_possible(selected_parts, budget, usage, options=None):
     """現在CPUがX3Dの場合、可能なら非X3Dへ置換する（置換不能なら現状維持）。"""
     options = options or {}
+    if usage == 'gaming' and options.get('build_priority') == 'spec':
+        return selected_parts, False
     if usage == 'gaming' and options.get('require_gaming_x3d_cpu'):
         return selected_parts, False
     current_cpu = selected_parts.get('cpu')
@@ -8053,9 +8055,9 @@ def build_configuration_response(
         pass  # X3D 強制ではなく、_prefer_higher_gaming_cost_x3d_cpu の後段処理で prefer する
     if require_gaming_x3d_cpu:
         selection_options['require_gaming_x3d_cpu'] = True
-    # gaming + cost でも、明示的に X3D 必須が指定されたときは強制を維持する。
-    if usage == 'gaming' and selection_options.get('build_priority') == 'cost' and not require_gaming_x3d_cpu:
-        selection_options['require_gaming_x3d_cpu'] = False
+    # gaming + cost は常に X3D 必須にする。
+    if usage == 'gaming' and selection_options.get('build_priority') == 'cost':
+        selection_options['require_gaming_x3d_cpu'] = True
     elif require_gaming_x3d_cpu:
         selection_options['require_gaming_x3d_cpu'] = True
 
@@ -8785,7 +8787,7 @@ def build_configuration_response(
             budget,
             market_range=selection_options.get('market_price_range'),
         )
-        enforce_cpu_tier = (budget_tier_for_cost == 'premium')
+        enforce_cpu_tier = budget_tier_for_cost in {'high', 'premium'}
 
     if enforce_cpu_tier:
         selected_parts, selected, cpu_tier_adjusted = _enforce_gaming_x3d_cpu_by_budget_tier(
