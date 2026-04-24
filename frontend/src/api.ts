@@ -73,6 +73,7 @@ export interface GenerateConfigRequest {
   storage3_part_id?: number;
   os_edition?: "auto" | "home" | "pro";
   custom_budget_weights?: CustomBudgetWeights;
+  cpu_part_id?: number;
 }
 
 export interface PartResponse {

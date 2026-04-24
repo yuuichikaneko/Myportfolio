@@ -7920,6 +7920,7 @@ def build_configuration_response(
     require_gaming_x3d_cpu=False,
     duplicate_retry_count=0,
     configuration_name=None,
+    cpu_part_id=None,
 ):
     if not isinstance(budget, int) or budget < 50000 or budget > 1500000:
         return None, Response({'detail': 'budgetは50,000円以上1,500,000円以下で入力してください'}, status=status.HTTP_400_BAD_REQUEST)
@@ -8720,6 +8721,15 @@ def build_configuration_response(
             x3d_enforcement_failed = True
             recommended_budget_min_for_x3d = recommended_budget_min_for_x3d or low_end_uplift_budget
 
+    # ユーザーが直接CPUを指定した場合は、自動選定結果を上書きする
+    if cpu_part_id is not None:
+        try:
+            override_cpu = PCPart.objects.get(id=int(cpu_part_id), part_type='cpu')
+            selected_parts['cpu'] = override_cpu
+            total_price = _sum_selected_price({**selected_parts, **extra_storage_parts})
+        except (PCPart.DoesNotExist, ValueError, TypeError):
+            pass  # 無効なIDの場合は自動選定のままにする
+
     selected = []
     for part_type in PART_ORDER:
         part = selected_parts.get(part_type)
@@ -9228,6 +9238,7 @@ class GenerateConfigAPIView(APIView):
             request.data.get('max_motherboard_chipset'),
             enforce_gaming_x3d=enforce_x3d,
             configuration_name=request.data.get('name'),
+            cpu_part_id=request.data.get('cpu_part_id'),
         )
         if error_response:
             error_response['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
