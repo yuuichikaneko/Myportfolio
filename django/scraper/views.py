@@ -3896,9 +3896,9 @@ def _pick_part_by_target(part_type, budget, usage, weights_override=None, option
                 candidates = ai_latest_filtered
             else:
                 candidates = []
-        if usage == 'gaming':
+        if usage == 'gaming' and cpu_vendor == 'any':
             candidates = [p for p in candidates if _is_cpu_vendor_match(p, 'amd')]
-        if usage == 'gaming' and require_gaming_x3d_cpu:
+        if usage == 'gaming' and require_gaming_x3d_cpu and cpu_vendor == 'any':
             x3d_filtered = [p for p in candidates if _is_gaming_cpu_x3d_preferred(p)]
             if x3d_filtered:
                 candidates = x3d_filtered
@@ -4547,9 +4547,12 @@ def _pick_part_by_target(part_type, budget, usage, weights_override=None, option
 
     if build_priority == 'cost':
         if part_type == 'cpu' and usage == 'gaming':
-            amd_candidates = [p for p in candidates if _is_cpu_vendor_match(p, 'amd')]
-            cpu_pool = candidates if require_gaming_x3d_cpu else (amd_candidates or candidates)
-            picked_cpu = _pick_amd_gaming_cpu(cpu_pool, 'cost', require_x3d=require_gaming_x3d_cpu)
+            if cpu_vendor == 'any':
+                amd_candidates = [p for p in candidates if _is_cpu_vendor_match(p, 'amd')]
+                cpu_pool = candidates if require_gaming_x3d_cpu else (amd_candidates or candidates)
+            else:
+                cpu_pool = candidates
+            picked_cpu = _pick_amd_gaming_cpu(cpu_pool, 'cost', require_x3d=(require_gaming_x3d_cpu and cpu_vendor == 'any'))
             if picked_cpu:
                 return picked_cpu
         if part_type == 'cpu' and usage == 'creator':
@@ -5179,10 +5182,11 @@ def _pick_candidate(part_type, predicate, usage=None, options=None):
     options = options or {}
     candidates = _get_cached_parts_by_type(part_type, options=options)
     require_gaming_x3d_cpu = options.get('require_gaming_x3d_cpu', False)
+    cpu_vendor_opt = options.get('cpu_vendor', 'any')
     
     # gaming 用途: 性能目安表スコアが 2000 以下の CPU を除外
     if part_type == 'cpu' and usage == 'gaming':
-        if require_gaming_x3d_cpu:
+        if require_gaming_x3d_cpu and cpu_vendor_opt == 'any':
             candidates = [p for p in candidates if _is_gaming_cpu_x3d_preferred(p)]
         minimum_perf_score = _minimum_gaming_cpu_perf_score(usage)
         if minimum_perf_score > 0 and not require_gaming_x3d_cpu:
@@ -5260,9 +5264,9 @@ def _matches_selection_options(part_type, part, options=None):
             return False
         if usage == 'creator' and UNSTABLE_INTEL_CORE_I_PATTERN.search(f"{getattr(part, 'name', '')} {getattr(part, 'url', '')}"):
             return False
-        if usage == 'gaming' and not _is_cpu_vendor_match(part, 'amd'):
+        if usage == 'gaming' and cpu_vendor == 'any' and not _is_cpu_vendor_match(part, 'amd'):
             return False
-        if usage == 'gaming' and require_gaming_x3d_cpu and not _is_gaming_cpu_x3d_preferred(part):
+        if usage == 'gaming' and require_gaming_x3d_cpu and cpu_vendor == 'any' and not _is_gaming_cpu_x3d_preferred(part):
             return False
         if usage == 'gaming' and not require_gaming_x3d_cpu:
             if _is_gaming_cpu_x3d_preferred(part):
@@ -8905,6 +8909,10 @@ def build_configuration_response(
 
     def _part_adjustment_reason(part_type):
         if part_type == 'cpu':
+            if cpu_vendor == 'intel':
+                return 'IntelメーカーのCPUを優先したため、Intel CPU候補から再選定しました。'
+            if cpu_vendor == 'amd':
+                return 'AMDメーカーのCPUを優先したため、AMD CPU候補から再選定しました。'
             return '用途・予算帯・方針に合わせてCPUを再選定しました。'
         if part_type == 'gpu':
             return '用途・予算帯・性能条件に合わせてGPUを再選定しました。'

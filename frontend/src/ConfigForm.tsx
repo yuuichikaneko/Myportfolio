@@ -914,6 +914,19 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
                   ))}
                 </div>
 
+                {/* Intel + ゲーミング選択時の注意: ボタン直下に常時表示 */}
+                {cpuVendor === "intel" && usage === "gaming" && (
+                  <p className="mt-1.5 rounded-md bg-amber-50 border border-amber-200 px-3 py-1.5 text-xs text-amber-700">
+                    ⚠️ ゲーミングPC用途の自動選定はAMD（X3D）基準で最適化されています。Intel CPUを選んでもAMDが選ばれます。Intelを選びたい場合はPC構成を提案後に変更してください。
+                  </p>
+                )}
+
+                {selectedCpuPartId && (
+                  <p className="mt-1.5 rounded-md border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs leading-relaxed text-amber-700 whitespace-normal break-words">
+                    ⚠️ このCPUを指定すると、ソケット互換のマザーボードが自動で選び直されます。意図しないマザーボードになる場合は「自動選定」に戻してください。
+                  </p>
+                )}
+
                 {/* アコーディオン: Intel/AMD 選択時に展開 */}
                 {cpuVendor !== "any" && (
                   <div className="mt-2 rounded-md border border-slate-200 bg-slate-50 overflow-hidden">
@@ -953,11 +966,6 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
                           </li>
                         ))}
                       </ul>
-                    )}
-                    {selectedCpuPartId && (
-                      <p className="border-t border-amber-100 bg-amber-50 px-3 py-1.5 text-xs text-amber-600">
-                        ⚠️ このCPUを指定すると、ソケット互換のマザーボードが自動で選び直されます。意図しないマザーボードになる場合は「自動選定」に戻してください。
-                      </p>
                     )}
                   </div>
                 )}
