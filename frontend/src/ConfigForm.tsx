@@ -403,6 +403,16 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
     [customBudgetWeights]
   );
 
+  const effectiveBudget = useMemo(() => getEffectiveBudgetByPriority(budget), [budget]);
+
+  const customBudgetWeightAmounts = useMemo(() => {
+    return CUSTOM_BUDGET_WEIGHT_FIELDS.reduce((acc, field) => {
+      const percentage = customBudgetWeights[field.key] ?? 0;
+      acc[field.key] = Math.round((effectiveBudget * percentage) / 100);
+      return acc;
+    }, {} as Record<keyof CustomBudgetWeights, number>);
+  }, [customBudgetWeights, effectiveBudget]);
+
   const presets = useMemo(() => {
     const min = marketRange.min;
     const sub = 15000;
@@ -1180,7 +1190,10 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
                 <div className="mx-auto grid w-full max-w-2xl gap-3 sm:grid-cols-2">
                   {CUSTOM_BUDGET_WEIGHT_FIELDS.map((field) => (
                     <label key={field.key} className="mx-auto flex w-full max-w-xs items-center justify-between rounded-lg border border-slate-300 p-3 text-sm text-slate-700">
-                      <span className="font-medium">{field.label}</span>
+                      <div className="flex flex-col">
+                        <span className="font-medium">{field.label}</span>
+                        <span className="text-xs text-slate-500">{`約 ¥${customBudgetWeightAmounts[field.key].toLocaleString("ja-JP")}`}</span>
+                      </div>
                       <div className="flex items-center gap-2">
                         <input
                           type="number"
@@ -1202,7 +1215,7 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
                   ))}
                 </div>
                 <p className={`text-center text-sm font-semibold ${customBudgetWeightTotal === 100 ? "text-emerald-700" : "text-rose-700"}`}>
-                  合計: {customBudgetWeightTotal}%
+                  {`合計: ${customBudgetWeightTotal}%（予算 ¥${effectiveBudget.toLocaleString("ja-JP")} ベース）`}
                 </p>
               </>
             )}
