@@ -122,10 +122,10 @@ const STORAGE_PREFERENCE_OPTIONS = [
 ] as const;
 
 const MAIN_STORAGE_CAPACITY_OPTIONS = [
-  { value: "512", label: "512GB" },
-  { value: "1024", label: "1TB" },
-  { value: "2048", label: "2TB" },
-  { value: "4096", label: "4TB" },
+  { value: "512", label: "512GB", desc: "軽い用途向けの標準容量。OS・アプリ用途に最低限必要なサイズ" },
+  { value: "1024", label: "1TB", desc: "最もバランスの良い容量。ゲーム・動画編集・日常利用に十分" },
+  { value: "2048", label: "2TB", desc: "大容量データや大作ゲームを多数保存するユーザー向け" },
+  { value: "4096", label: "4TB", desc: "大量の動画・データを扱うプロ・クリエイター向け" },
 ] as const;
 
 const STORAGE_ADDITIONAL_OPTIONS = [
@@ -893,6 +893,9 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
                         key={option.value}
                         type="button"
                         onClick={() => setMainStorageCapacity(option.value as "512" | "1024" | "2048" | "4096")}
+                        onMouseEnter={(e) => { setActiveCoolingGridTooltip({ key: `mainStorage_${option.value}`, desc: option.desc }); setCoolingGridTooltipPos({ x: e.clientX, y: e.clientY }); }}
+                        onMouseLeave={() => setActiveCoolingGridTooltip(null)}
+                        onMouseMove={(e) => setCoolingGridTooltipPos({ x: e.clientX, y: e.clientY })}
                         className={segmentButtonClass(mainStorageCapacity === option.value)}
                       >
                         {option.label}
@@ -1154,10 +1157,12 @@ export function ConfigForm({ onSubmit, isLoading }: ConfigFormProps) {
                   key={option.value}
                   type="button"
                   onClick={() => setOsEdition(option.value as "auto" | "home" | "pro")}
+                  onMouseEnter={(e) => { setActiveCoolingGridTooltip({ key: `os_${option.value}`, desc: option.desc }); setCoolingGridTooltipPos({ x: e.clientX, y: e.clientY }); }}
+                  onMouseLeave={() => setActiveCoolingGridTooltip(null)}
+                  onMouseMove={(e) => setCoolingGridTooltipPos({ x: e.clientX, y: e.clientY })}
                   className={segmentButtonClass(osEdition === option.value)}
                 >
-                  <span className="block">{option.label}</span>
-                  <span className="mt-1 block text-[11px] font-normal opacity-80">{option.desc}</span>
+                  {option.label}
                 </button>
               ))}
             </div>

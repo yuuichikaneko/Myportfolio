@@ -105,6 +105,29 @@ python manage.py runserver 8001
 ```
 `http://localhost:8001` で起動
 
+### スクレイピング自動実行（Celery不要）
+`django/auto_run_scrapers.py` は `scraper.tasks.run_scraper_task()` を定期実行するランナーです。
+
+1回だけ実行:
+```bash
+cd django
+../.venv/Scripts/python.exe auto_run_scrapers.py
+```
+
+30分ごとに自動実行（失敗しても継続）:
+```bash
+cd django
+../.venv/Scripts/python.exe auto_run_scrapers.py --interval-minutes 30 --continue-on-error
+```
+
+3回だけ実行して終了:
+```bash
+cd django
+../.venv/Scripts/python.exe auto_run_scrapers.py --interval-minutes 15 --max-runs 3 --continue-on-error
+```
+
+ログ出力先: `logs/auto_run_scrapers.log`
+
 #### PostgreSQLマイグレーション準備（Django）
 1. Django依存パッケージをインストール・更新:
 ```bash
