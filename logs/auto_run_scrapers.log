@@ -4,3 +4,173 @@
 2026-04-27 16:37:26,360 [INFO] scraper_task_completed source=dospara_parts fetched=538 created=28 updated=510 normalized=0 merged=0 gpu_perf={'status': 'success', 'source': 'dospara_gpu_performance_page', 'entries': 103, 'snapshot_id': 5, 'saved_entries': 87, 'legacy_specs_sync_enabled': False, 'matched': 0, 'updated': 0, 'skipped': 0} market_range={'status': 'success', 'snapshot_id': 3, 'min': 178980, 'max': 1299980, 'default': 724480} cpu_selection={'status': 'success', 'snapshot_id': 191, 'entry_count': 340, 'excluded_count': 33}
 2026-04-27 16:37:26,362 [INFO] run_completed run_no=1 elapsed_sec=420.67 result={"status": "success", "source": "dospara_parts", "fetched": 538, "created": 28, "updated": 510, "normalized": 0, "merged": 0, "gpu_perf": {"status": "success", "source": "dospara_gpu_performance_page", "entries": 103, "snapshot_id": 5, "saved_entries": 87, "legacy_specs_sync_enabled": false, "matched": 0, "updated": 0, "skipped": 0}, "market_range": {"status": "success", "snapshot_id": 3, "min": 178980, "max": 1299980, "default": 724480}, "cpu_selection": {"status": "success", "snapshot_id": 191, "entry_count": 340, "excluded_count": 33}}
 2026-04-27 16:37:26,362 [INFO] auto_runner_stopped total_runs=1 success=1 failed=0 stop_requested=False
+2026-06-04 17:03:30,430 [INFO] auto_runner_started at=2026-06-04T17:03:30 interval_minutes=0 max_runs=0 continue_on_error=False
+2026-06-04 17:03:30,436 [INFO] run_started run_no=1
+2026-06-04 17:03:30,460 [INFO] scraper_task_started source=dospara_parts env=development url=https://www.dospara.co.jp/parts timeout=20 max_items=120
+2026-06-04 17:07:05,184 [ERROR] scraper_task_failed source=dospara_parts error=UNIQUE constraint failed: scraper_pcpart.dospara_code
+Traceback (most recent call last):
+  File "F:\Python\Myportfolio\.venv\Lib\site-packages\django\db\models\query.py", line 916, in get_or_create
+    return self.get(**kwargs), False
+           ^^^^^^^^^^^^^^^^^^
+  File "F:\Python\Myportfolio\.venv\Lib\site-packages\django\db\models\query.py", line 637, in get
+    raise self.model.DoesNotExist(
+scraper.models.PCPart.DoesNotExist: PCPart matching query does not exist.
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "F:\Python\Myportfolio\.venv\Lib\site-packages\django\db\backends\utils.py", line 89, in _execute
+    return self.cursor.execute(sql, params)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "F:\Python\Myportfolio\.venv\Lib\site-packages\django\db\backends\sqlite3\base.py", line 328, in execute
+    return super().execute(query, params)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+sqlite3.IntegrityError: UNIQUE constraint failed: scraper_pcpart.dospara_code
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "F:\Python\Myportfolio\django\scraper\tasks.py", line 498, in run_scraper_task
+    upserted, created = PCPart.objects.update_or_create(
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "F:\Python\Myportfolio\.venv\Lib\site-packages\django\db\models\manager.py", line 87, in manager_method
+    return getattr(self.get_queryset(), name)(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "F:\Python\Myportfolio\.venv\Lib\site-packages\django\db\models\query.py", line 949, in update_or_create
+    obj, created = self.select_for_update().get_or_create(defaults, **kwargs)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "F:\Python\Myportfolio\.venv\Lib\site-packages\django\db\models\query.py", line 923, in get_or_create
+    return self.create(**params), True
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "F:\Python\Myportfolio\.venv\Lib\site-packages\django\db\models\query.py", line 658, in create
+    obj.save(force_insert=True, using=self.db)
+  File "F:\Python\Myportfolio\django\scraper\models.py", line 184, in save
+    super().save(*args, **kwargs)
+  File "F:\Python\Myportfolio\.venv\Lib\site-packages\django\db\models\base.py", line 814, in save
+    self.save_base(
+  File "F:\Python\Myportfolio\.venv\Lib\site-packages\django\db\models\base.py", line 877, in save_base
+    updated = self._save_table(
+              ^^^^^^^^^^^^^^^^^
+  File "F:\Python\Myportfolio\.venv\Lib\site-packages\django\db\models\base.py", line 1020, in _save_table
+    results = self._do_insert(
+              ^^^^^^^^^^^^^^^^
+  File "F:\Python\Myportfolio\.venv\Lib\site-packages\django\db\models\base.py", line 1061, in _do_insert
+    return manager._insert(
+           ^^^^^^^^^^^^^^^^
+  File "F:\Python\Myportfolio\.venv\Lib\site-packages\django\db\models\manager.py", line 87, in manager_method
+    return getattr(self.get_queryset(), name)(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "F:\Python\Myportfolio\.venv\Lib\site-packages\django\db\models\query.py", line 1805, in _insert
+    return query.get_compiler(using=using).execute_sql(returning_fields)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "F:\Python\Myportfolio\.venv\Lib\site-packages\django\db\models\sql\compiler.py", line 1822, in execute_sql
+    cursor.execute(sql, params)
+  File "F:\Python\Myportfolio\.venv\Lib\site-packages\django\db\backends\utils.py", line 102, in execute
+    return super().execute(sql, params)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "F:\Python\Myportfolio\.venv\Lib\site-packages\django\db\backends\utils.py", line 67, in execute
+    return self._execute_with_wrappers(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "F:\Python\Myportfolio\.venv\Lib\site-packages\django\db\backends\utils.py", line 80, in _execute_with_wrappers
+    return executor(sql, params, many, context)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "F:\Python\Myportfolio\.venv\Lib\site-packages\django\db\backends\utils.py", line 84, in _execute
+    with self.db.wrap_database_errors:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "F:\Python\Myportfolio\.venv\Lib\site-packages\django\db\utils.py", line 91, in __exit__
+    raise dj_exc_value.with_traceback(traceback) from exc_value
+  File "F:\Python\Myportfolio\.venv\Lib\site-packages\django\db\backends\utils.py", line 89, in _execute
+    return self.cursor.execute(sql, params)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "F:\Python\Myportfolio\.venv\Lib\site-packages\django\db\backends\sqlite3\base.py", line 328, in execute
+    return super().execute(query, params)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+django.db.utils.IntegrityError: UNIQUE constraint failed: scraper_pcpart.dospara_code
+2026-06-04 17:07:05,300 [INFO] run_completed run_no=1 elapsed_sec=214.86 result={"status": "error", "message": "UNIQUE constraint failed: scraper_pcpart.dospara_code"}
+2026-06-04 17:07:05,300 [INFO] auto_runner_stopped total_runs=1 success=1 failed=0 stop_requested=False
+2026-06-04 17:45:55,414 [INFO] auto_runner_started at=2026-06-04T17:45:55 interval_minutes=15 max_runs=3 continue_on_error=True
+2026-06-04 17:45:55,414 [INFO] run_started run_no=1
+2026-06-04 17:45:55,432 [INFO] scraper_task_started source=dospara_parts env=development url=https://www.dospara.co.jp/parts timeout=20 max_items=120
+2026-06-04 17:50:06,579 [ERROR] scraper_task_failed source=dospara_parts error=UNIQUE constraint failed: scraper_pcpart.dospara_code
+Traceback (most recent call last):
+  File "F:\Python\Myportfolio\.venv\Lib\site-packages\django\db\models\query.py", line 916, in get_or_create
+    return self.get(**kwargs), False
+           ^^^^^^^^^^^^^^^^^^
+  File "F:\Python\Myportfolio\.venv\Lib\site-packages\django\db\models\query.py", line 637, in get
+    raise self.model.DoesNotExist(
+scraper.models.PCPart.DoesNotExist: PCPart matching query does not exist.
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "F:\Python\Myportfolio\.venv\Lib\site-packages\django\db\backends\utils.py", line 89, in _execute
+    return self.cursor.execute(sql, params)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "F:\Python\Myportfolio\.venv\Lib\site-packages\django\db\backends\sqlite3\base.py", line 328, in execute
+    return super().execute(query, params)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+sqlite3.IntegrityError: UNIQUE constraint failed: scraper_pcpart.dospara_code
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "F:\Python\Myportfolio\django\scraper\tasks.py", line 498, in run_scraper_task
+    upserted, created = PCPart.objects.update_or_create(
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "F:\Python\Myportfolio\.venv\Lib\site-packages\django\db\models\manager.py", line 87, in manager_method
+    return getattr(self.get_queryset(), name)(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "F:\Python\Myportfolio\.venv\Lib\site-packages\django\db\models\query.py", line 949, in update_or_create
+    obj, created = self.select_for_update().get_or_create(defaults, **kwargs)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "F:\Python\Myportfolio\.venv\Lib\site-packages\django\db\models\query.py", line 923, in get_or_create
+    return self.create(**params), True
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "F:\Python\Myportfolio\.venv\Lib\site-packages\django\db\models\query.py", line 658, in create
+    obj.save(force_insert=True, using=self.db)
+  File "F:\Python\Myportfolio\django\scraper\models.py", line 184, in save
+    super().save(*args, **kwargs)
+  File "F:\Python\Myportfolio\.venv\Lib\site-packages\django\db\models\base.py", line 814, in save
+    self.save_base(
+  File "F:\Python\Myportfolio\.venv\Lib\site-packages\django\db\models\base.py", line 877, in save_base
+    updated = self._save_table(
+              ^^^^^^^^^^^^^^^^^
+  File "F:\Python\Myportfolio\.venv\Lib\site-packages\django\db\models\base.py", line 1020, in _save_table
+    results = self._do_insert(
+              ^^^^^^^^^^^^^^^^
+  File "F:\Python\Myportfolio\.venv\Lib\site-packages\django\db\models\base.py", line 1061, in _do_insert
+    return manager._insert(
+           ^^^^^^^^^^^^^^^^
+  File "F:\Python\Myportfolio\.venv\Lib\site-packages\django\db\models\manager.py", line 87, in manager_method
+    return getattr(self.get_queryset(), name)(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "F:\Python\Myportfolio\.venv\Lib\site-packages\django\db\models\query.py", line 1805, in _insert
+    return query.get_compiler(using=using).execute_sql(returning_fields)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "F:\Python\Myportfolio\.venv\Lib\site-packages\django\db\models\sql\compiler.py", line 1822, in execute_sql
+    cursor.execute(sql, params)
+  File "F:\Python\Myportfolio\.venv\Lib\site-packages\django\db\backends\utils.py", line 102, in execute
+    return super().execute(sql, params)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "F:\Python\Myportfolio\.venv\Lib\site-packages\django\db\backends\utils.py", line 67, in execute
+    return self._execute_with_wrappers(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "F:\Python\Myportfolio\.venv\Lib\site-packages\django\db\backends\utils.py", line 80, in _execute_with_wrappers
+    return executor(sql, params, many, context)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "F:\Python\Myportfolio\.venv\Lib\site-packages\django\db\backends\utils.py", line 84, in _execute
+    with self.db.wrap_database_errors:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "F:\Python\Myportfolio\.venv\Lib\site-packages\django\db\utils.py", line 91, in __exit__
+    raise dj_exc_value.with_traceback(traceback) from exc_value
+  File "F:\Python\Myportfolio\.venv\Lib\site-packages\django\db\backends\utils.py", line 89, in _execute
+    return self.cursor.execute(sql, params)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "F:\Python\Myportfolio\.venv\Lib\site-packages\django\db\backends\sqlite3\base.py", line 328, in execute
+    return super().execute(query, params)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+django.db.utils.IntegrityError: UNIQUE constraint failed: scraper_pcpart.dospara_code
+2026-06-04 17:50:06,595 [INFO] run_completed run_no=1 elapsed_sec=251.18 result={"status": "error", "message": "UNIQUE constraint failed: scraper_pcpart.dospara_code"}
+2026-06-04 17:50:06,596 [INFO] sleeping seconds=900
+2026-06-04 18:05:06,920 [INFO] run_started run_no=2
+2026-06-04 18:05:06,923 [INFO] scraper_task_started source=dospara_parts env=development url=https://www.dospara.co.jp/parts timeout=20 max_items=120
